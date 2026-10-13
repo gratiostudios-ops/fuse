@@ -2,7 +2,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRefreshCoordinator, REFRESH_INTERVAL_MS, type RefreshDependencies } from '../engine';
-import { processRefreshSnapshot } from '../processor';
 import type { CachedRefresh, RefreshSnapshot } from '../types';
 import type { Task, Suggestion } from '../../api/types';
 
@@ -34,7 +33,7 @@ function fixture(userId: string | null = null) {
     getSchedules: async () => { calls.schedules++; return []; },
     schedulesImplemented: false,
     getSuggestions: async topic => { calls.suggestions.push(topic); return [video('shared'), video(topic)]; },
-    process: async snapshot => { calls.snapshots.push(snapshot); return processRefreshSnapshot(snapshot); },
+    process: async snapshot => { calls.snapshots.push(snapshot); return { status: 'completed' }; },
     readCache: async () => state.cache,
     saveCache: async record => { state.cache = record; },
     clearCache: async () => { state.cache = null; },
@@ -54,7 +53,7 @@ test('signed-out refresh collects only public suggestions and deduplicates topic
   assert.deepEqual(calls.suggestions, ['topic-a', 'topic-b']);
   assert.equal(result.record?.snapshot.suggestions.data.length, 3);
   assert.equal(result.record?.snapshot.tasks.status, 'skipped');
-  assert.equal(result.record?.processing.status, 'not-configured');
+  assert.equal(result.record?.processing.status, 'completed');
 });
 
 test('signed-in refresh collects owned tasks and marks the schedules placeholder', async () => {

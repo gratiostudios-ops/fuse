@@ -4,14 +4,14 @@ One shared pipeline runs on startup, when the app resumes with overdue data, app
 
 ## Data flow
 
-- Signed in: fetch owned tasks, call the authenticated schedules placeholder, and fetch public suggestions for selected local topics.
+- Signed in: fetch owned tasks and schedules, and fetch public suggestions for selected local topics.
 - Signed out: skip tasks/schedules and fetch only public suggestions.
 - No topics selected: suggestions are empty with `no-topics` status. Topic selection defaults to an empty array; a selection screen is not included yet.
 - Each source is fetched independently. Suggestions are deduplicated across topics; source errors are recorded alongside successful data. Failed source data is empty rather than reused from an old account/snapshot.
-- Pass the snapshot to `processRefreshSnapshot()` in `processor.ts`. It currently returns `not-configured`; there is no AI request or generated answer.
-- Cache the snapshot, processing status, and completion time locally. Private cache reads verify the current account and selected topics. Logout/account changes clear the cache; user/topic changes during collection, processing, or saving discard the old run.
+- Pass the snapshot to `processRefreshSnapshot()` in `processor.ts`. For signed-in users it calls `fuse-ai` in Home mode and stores a validated card response. The server independently fetches verified records; it does not trust the client snapshot as database evidence. Signed-out processing returns `not-configured`. See `api/AI_SETUP.md` for deployment.
+- Cache the snapshot, processing status, AI response, and completion time locally. Private cache reads verify the current account and selected topics. Logout/account changes clear the cache; user/topic changes during collection, processing, or saving discard the old run.
 
-The 30-minute age is measured from the last saved attempt, including partial results, to avoid repeated request storms on resume. `refreshNow()` bypasses it. Authentication/session initialization failure aborts a run; it is not treated as anonymous access. A source's authentication rejection is distinct from its network/query failure.
+The 30-minute age is measured from the last saved attempt with a completed AI response. Failed or old unconfigured AI results do not postpone the next decision; server request budgets limit repeated calls. `refreshNow()` bypasses it. Authentication/session initialization failure aborts a run; it is not treated as anonymous access. A source's authentication rejection is distinct from its network/query failure.
 
 ## Module usage
 
@@ -27,7 +27,7 @@ const cached = await getLatestRefresh();
 // Each data source includes status, data, and optional error details.
 ```
 
-Data is not yet rendered in the existing screens. `getSchedules()` in `api/schedules` verifies sign-in and returns `[]` without calling a schedules database/API. Implement that module later and change `SCHEDULES_IMPLEMENTED` to true.
+Home renders the AI-selected verified cards and short reasons. `getSchedules()` queries owned Supabase schedules with pagination; Google synchronization is separate. Assigned AI suggestions are read server-side from `user_suggestions`, while the local snapshot retains the existing public topic catalog reads. Call `refreshNow()` after confirmed app mutations; external database changes require Refresh or the next scheduled run.
 
 ## Background setup
 

@@ -1,6 +1,8 @@
-# Suggestions and Tasks APIs
+# Suggestions, Tasks, and AI APIs
 
-This folder is a client module for Supabase's Data API. It needs no custom backend or Edge Function deployment. The Expo `/suggestions` route remains the UI screen; the data endpoint is `GET https://<project>.supabase.co/rest/v1/suggestions`.
+Chat and Home AI setup is documented in [AI_SETUP.md](AI_SETUP.md); it requires deploying the `fuse-ai` Edge Function.
+
+The catalog/task portion of this folder is a client module for Supabase's Data API. It needs no custom backend or Edge Function deployment. The Expo `/suggestions` route remains the UI screen; the data endpoint is `GET https://<project>.supabase.co/rest/v1/suggestions`.
 
 ## Supabase setup
 

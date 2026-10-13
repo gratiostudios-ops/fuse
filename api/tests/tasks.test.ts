@@ -6,7 +6,7 @@ import { createClient, type SupabaseClientOptions } from '@supabase/supabase-js'
 import { AuthenticationRequiredError } from '../auth/user';
 import { queryTasks } from '../tasks/query';
 import { querySchedules } from '../schedules/query';
-import type { CatalogDatabase, Task } from '../types';
+import type { CatalogDatabase, Task, Schedule } from '../types';
 
 const ALICE = '11111111-1111-4111-8111-111111111111';
 const BOB = '22222222-2222-4222-8222-222222222222';
@@ -21,7 +21,7 @@ function task(id: string, userId: string, completed = false): Task {
   };
 }
 
-async function clientFor(userId: string | null, rows: Task[], cap = 100) {
+async function clientFor(userId: string | null, rows: (Task | Schedule)[], cap = 100, table = 'tasks') {
   const requests: URL[] = [];
   let invalidSession = false;
   const mockFetch: typeof fetch = async (input, init) => {
@@ -35,9 +35,9 @@ async function clientFor(userId: string | null, rows: Task[], cap = 100) {
         app_metadata: { provider: 'google' }, user_metadata: {}, created_at: '2026-10-13T00:00:00Z',
       }), { status: 200 });
     }
-    assert.equal(url.pathname, '/rest/v1/tasks');
+    assert.equal(url.pathname, `/rest/v1/${table}`);
     assert.equal(url.searchParams.get('user_id'), `eq.${userId}`);
-    assert.equal(url.searchParams.get('order'), 'due_date.asc.nullslast,due_time.asc.nullslast,id.asc');
+    assert.equal(url.searchParams.get('order'), table === 'tasks' ? 'due_date.asc.nullslast,due_time.asc.nullslast,id.asc' : 'valid_from.asc,id.asc');
     assert(new Headers(init?.headers).get('Authorization')?.startsWith('Bearer '));
     const filtered = rows.filter(row => row.user_id === userId);
     const offset = Number(url.searchParams.get('offset'));
@@ -104,10 +104,15 @@ test('signing out prevents subsequent task reads', async () => {
   await assert.rejects(queryTasks(client), AuthenticationRequiredError);
 });
 
-test('schedules placeholder requires auth and does not query a schedules endpoint', async () => {
+test('schedules reads require auth and paginate records scoped to the verified user', async () => {
   const anonymous = await clientFor(null, []);
   await assert.rejects(querySchedules(anonymous.client), AuthenticationRequiredError);
-  const signedIn = await clientFor(ALICE, []);
-  assert.deepEqual(await querySchedules(signedIn.client), []);
-  assert.deepEqual(signedIn.requests.map(url => url.pathname), ['/auth/v1/user']);
+  const schedule = (id: string, user_id: string): Schedule => ({
+    id, user_id, title: id, description: null, valid_from: '2026-10-14T10:00:00Z', valid_to: '2026-10-14T11:00:00Z',
+    mark_completed: false, google_connection_id: null, cal_event_id: null, sync_status: 'synced',
+    created_at: '2026-10-13T00:00:00Z', updated_at: '2026-10-13T00:00:00Z',
+  });
+  const signedIn = await clientFor(ALICE, [schedule('a', ALICE), schedule('b', BOB), schedule('c', ALICE)], 1, 'schedules');
+  assert.deepEqual((await querySchedules(signedIn.client)).map(s => s.id), ['a', 'c']);
+  assert.deepEqual(signedIn.requests.slice(1).map(url => url.searchParams.get('offset')), ['0', '1']);
 });

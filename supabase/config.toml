@@ -1,0 +1,4 @@
+[functions.fuse-ai]
+# Authentication is enforced by auth.getUser(token) in the handler.
+# Supports projects using asymmetric signing keys as well as legacy keys.
+verify_jwt = false

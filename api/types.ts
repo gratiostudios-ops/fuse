@@ -48,6 +48,12 @@ export type Schedule = {
 export type CatalogDatabase = {
   public: {
     Tables: {
+      schedules: {
+        Row: Schedule;
+        Insert: Partial<Schedule> & Pick<Schedule, 'user_id' | 'title' | 'valid_from' | 'valid_to'>;
+        Update: Partial<Schedule>;
+        Relationships: [];
+      };
       tasks: {
         Row: Task;
         Insert: Partial<Task> & Pick<Task, 'user_id' | 'title' | 'due_date'>;

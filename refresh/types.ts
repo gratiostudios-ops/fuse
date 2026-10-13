@@ -19,7 +19,7 @@ export type RefreshSnapshot = {
 
 export type ProcessingResult =
   | { status: 'not-configured' }
-  | { status: 'completed' }
+  | { status: 'completed'; response?: import('../api/ai').FuseResponse }
   | { status: 'error'; error: string };
 
 export type CachedRefresh = {

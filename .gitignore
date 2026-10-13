@@ -4,7 +4,9 @@ dist/
 web-build/
 expo-env.d.ts
 *.tsbuildinfo
-.env*.local
+.env
+.env.*
+!.env.example
 .DS_Store
 /android/
 /ios/

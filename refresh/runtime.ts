@@ -19,11 +19,10 @@ const coordinator = createRefreshCoordinator({
   schedulesImplemented: SCHEDULES_IMPLEMENTED,
   getSuggestions: topicId => getSuggestions({ topicId }),
   process: processRefreshSnapshot,
-  async readCache() {
-    const cached = await readRefreshCache();
+  readCache: readRefreshCache,
+  canReuseCache(cached) {
     // Old text-only/unconfigured caches must not postpone the first AI decision.
-    if (cached?.snapshot.userId && (cached.processing.status !== 'completed' || !cached.processing.response)) return null;
-    return cached;
+    return !cached.snapshot.userId || (cached.processing.status === 'completed' && !!cached.processing.response);
   },
   saveCache: saveRefreshCache,
   clearCache: clearRefreshCache,

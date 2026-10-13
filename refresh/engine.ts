@@ -12,6 +12,7 @@ export type RefreshDependencies = {
   getSuggestions(topicId: string): Promise<Suggestion[]>;
   process(snapshot: RefreshSnapshot): Promise<ProcessingResult>;
   readCache(): Promise<CachedRefresh | null>;
+  canReuseCache?(record: CachedRefresh): boolean;
   saveCache(record: CachedRefresh): Promise<void>;
   clearCache(): Promise<void>;
   now(): number;
@@ -64,7 +65,7 @@ export function createRefreshCoordinator(deps: RefreshDependencies) {
     const scope = contextKey(userId, topicIds);
     const cached = await deps.readCache();
     if (cached && contextKey(cached.snapshot.userId, cached.snapshot.topicIds) !== scope) await deps.clearCache();
-    if (!force && cached && contextKey(cached.snapshot.userId, cached.snapshot.topicIds) === scope) {
+    if (!force && cached && (deps.canReuseCache?.(cached) ?? true) && contextKey(cached.snapshot.userId, cached.snapshot.topicIds) === scope) {
       const age = deps.now() - Date.parse(cached.completedAt);
       if (age >= 0 && age < REFRESH_INTERVAL_MS) return { status: 'skipped', reason: 'not-due' };
     }

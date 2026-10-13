@@ -8,6 +8,8 @@ import { Inter_400Regular, Inter_500Medium, Inter_900Black } from '@expo-google-
 import { CrimsonPro_700Bold } from '@expo-google-fonts/crimson-pro';
 import { Poppins_400Regular, Poppins_600SemiBold } from '@expo-google-fonts/poppins';
 import { colors } from '../src/theme';
+import { AuthProvider } from '../src/auth-context';
+import { RefreshLifecycle } from '../src/refresh-lifecycle';
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -32,7 +34,10 @@ export default function RootLayout() {
     <View style={styles.background}>
       <StatusBar hidden />
       <View style={styles.shell}>
-        <Slot />
+        <AuthProvider>
+          <RefreshLifecycle />
+          <Slot />
+        </AuthProvider>
       </View>
     </View>
   );

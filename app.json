@@ -11,10 +11,17 @@
       "expo-router",
       "expo-font",
       "expo-status-bar",
-      "expo-splash-screen"
+      "expo-splash-screen",
+      "expo-web-browser",
+      "expo-secure-store",
+      "expo-background-task"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.fuse.app"
+    },
+    "android": {
+      "package": "com.fuse.app"
     },
     "web": {
       "bundler": "metro",

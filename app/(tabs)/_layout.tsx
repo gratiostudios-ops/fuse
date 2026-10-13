@@ -1,6 +1,6 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Tabs, TabList, TabSlot, TabTrigger } from 'expo-router/ui';
-import { usePathname } from 'expo-router';
+import { router, usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HouseIcon, LightbulbIcon, ListIcon } from 'phosphor-react-native';
 import { colors, fonts } from '../../src/theme';
@@ -13,14 +13,14 @@ export default function TabLayout() {
   return (
     <Tabs style={styles.tabs}>
       <View style={[styles.header, { height: Math.max(134, insets.top + 78) }]}>
-        <View
-          accessibilityLabel="Menu"
+        <Pressable
+          accessibilityLabel="Google account"
           accessibilityRole="button"
-          accessibilityState={{ disabled: true }}
+          onPress={() => router.push('/sign-in')}
           style={[styles.menu, { top: Math.max(58, insets.top + 2) }]}
         >
           <ListIcon size={24} color={colors.active} weight="regular" />
-        </View>
+        </Pressable>
       </View>
       <TabSlot style={styles.content} />
       <TabList style={styles.navigation}>

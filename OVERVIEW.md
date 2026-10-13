@@ -4,7 +4,7 @@
 
 Build an AI-powered personal productivity assistant that combines an organizer, Google Calendar and Google Tasks integration, personalized recommendations, and a concise conversational interface.
 
-**Core principle:** Conversations are temporary; useful outcomes (tasks, events, suggestions, preferences) are saved.
+**Core principle:** Conversations are temporary; useful outcomes (tasks, events, user-specific recommendation assignments, preferences) are saved.
 
 ## 2. Primary features
 
@@ -25,11 +25,13 @@ Build an AI-powered personal productivity assistant that combines an organizer, 
 - Confirm ambiguous or consequential calendar changes before writing them.
 
 ### Suggestions
-- Suggest videos, blogs, games, courses, or other resources based on **interests, skills, available time, and preferences**.
-- Display new and previous suggestions on a dedicated page.
-- Store recommendation metadata (title, link, content type, topics, summary, estimated duration, generation time).
-- Collect per-suggestion feedback: **Interested / Not Interested / Not Rated**.
-- Consider feedback when improving later recommendations without inferring too much from a single click.
+- The **admin** regularly adds or refreshes YouTube videos in a standalone `suggestions` catalog, including video URL, thumbnail, description, duration, and active status.
+- The admin controls a shared, **predefined `topics` catalog**; users select existing topics but cannot create new ones.
+- Each video can belong to multiple topics via `suggestion_topics`; each user can select multiple topics via `user_topics`.
+- At a scheduled time, a recommendation job matches available videos to users using selected topics, skills, preferences, feedback, and available time.
+- Save each assignment in `user_suggestions`, not in the master catalog. Show current and historical assignments on the Suggestions page.
+- Collect per-assignment feedback: **Interested / Not Interested / Not Rated**. Keep older assignments traceable; do not delete catalog videos during daily refreshes just to replace them.
+- The current master catalog is **YouTube-video-specific**. Supporting blogs, games, and courses later would require broadening its fields/content model.
 
 ### Preferences & notifications
 - Store explicit user preferences and reusable insights (e.g., short AI replies, preferred content types, notification settings, preferred learning time).
@@ -44,7 +46,7 @@ Build an AI-powered personal productivity assistant that combines an organizer, 
 | Organizer | Separate task and event lists; |
 | Suggestions | Current and historical recommendations; interest feedback |
 | AI Chat | Short conversations, structured results, create/query actions |
-| Settings/Profile | Interests, skills, preferences, notifications, Google connection |
+| Settings/Profile | Selected topics, skills, preferences, notifications, Google connection |
 
 UI cards can be color-coded: **blue for events**, **red for tasks**, **green for suggestions**. Colors are a frontend choice, not a database attribute.
 
@@ -59,12 +61,16 @@ UI cards can be color-coded: **blue for events**, **red for tasks**, **green for
 - `skill` (text)
 - Composite PK: (`user_id`, `skill`)
 
-### `user_interests`
-- `user_id` (FK to `users`)
-- `interest` (text)
-- Composite PK: (`user_id`, `interest`)
+### `topics`
+- `id` (UUID, PK), `name` (unique predefined topic), `created_at`
+- Admin-managed master list of selectable topics, e.g. Python, AI, React.
 
-Separating skills and interests into rows supports conventional 1NF normalization. A composite key **does allow** the same user to have multiple different skills/interests; it only prevents duplicate pairs.
+### `user_topics`
+- `user_id` (FK to `users`), `topic_id` (FK to `topics`)
+- Composite PK: (`user_id`, `topic_id`)
+- Links each user to any number of **predefined** topics; users cannot add rows to the master `topics` table.
+
+`user_interests` is **not part of the intended final model**: it has been replaced conceptually by `user_topics`. If it still exists in Supabase, migrate any desired values and drop it separately. Composite keys prevent duplicate pairs without restricting each user to one topic/skill.
 
 ### `tasks`
 - `id` (UUID, PK), `user_id` (FK)
@@ -72,7 +78,8 @@ Separating skills and interests into rows supports conventional 1NF normalizatio
 - `due_date` (DATE), `due_time` (TIME, nullable)
 - `mark_completed` (BOOLEAN)
 - `google_connection_id` (nullable FK to connected Google account)
-- `google_task_id`,(nullable external IDs)
+- `google_task_id` (nullable Google task ID)
+- **Recommended addition:** `google_tasklist_id` (Google task-list ID, currently absent from the reported table)
 - `sync_status` (`pending` / `synced` / `error`)
 - `created_at`, `updated_at`
 
@@ -88,14 +95,23 @@ Separating skills and interests into rows supports conventional 1NF normalizatio
 - `sync_status`, `created_at`, `updated_at`
 - Optional later: `task_id` if scheduling a focused work block for an existing task
 
-### `suggestions`
-- `id` (UUID, PK), `user_id` (FK)
-- `title`, `content_type`, `link`, `summary`
-- `estimated_duration` (minutes)
-- `is_interested` (nullable BOOLEAN: null = unrated)
-- `valid_from`, `valid_to` (nullable; only when recommendation has a useful validity window)
-- `created_at`
-- `suggestion_topics(suggestion_id, topic)` as a separate table if strictly normalizing multi-topic suggestions; otherwise a PostgreSQL text array is a practical MVP option.
+### `suggestions` (admin-owned master video catalog)
+- `id` (UUID, PK)
+- `title`, `youtube_video_id` (unique), `video_url`, `thumbnail_url`, `description`
+- `duration_minutes` (nullable), `created_at`, `updated_at`, `is_active`
+- **No `user_id`, no `is_interested`**: a video can be reused for different users.
+
+### `suggestion_topics`
+- `suggestion_id` (FK to `suggestions`), `topic_id` (FK to `topics`)
+- Composite PK: (`suggestion_id`, `topic_id`)
+- Many-to-many tagging: each suggestion can have multiple predefined topics, and each topic can label multiple suggestions.
+- Business rule: **every suggestion must have at least one topic**. The junction table alone does not enforce that; enforce in the admin ingestion transaction or a trigger.
+
+### `user_suggestions`
+- `id` (UUID, PK), `user_id` (FK to `users`), `suggestion_id` (FK to `suggestions`)
+- `recommended_at` (timestamp), `is_interested` (nullable BOOLEAN), `feedback_at` (nullable timestamp)
+- Records each recommendation event for history and feedback. A user can receive many videos; one video can be sent to many users. Repeat assignments can be recorded on different occasions.
+- Do not delete videos that are referenced by historical assignments. Deactivate stale videos with `is_active = false` instead.
 
 ### `calendar_connections`
 - `id` (UUID, PK), `user_id` (FK)
@@ -121,27 +137,34 @@ Example: `category=ai_response`, `preference_key=response_length`, `preference_v
 ## 5. High-level relationships
 
 ```mermaid
- erDiagram
+erDiagram
     USERS ||--o{ USER_SKILLS : has
-    USERS ||--o{ USER_INTERESTS : has
+    USERS ||--o{ USER_TOPICS : selects
+    TOPICS ||--o{ USER_TOPICS : chosen_in
     USERS ||--o{ TASKS : owns
     USERS ||--o{ SCHEDULES : owns
-    USERS ||--o{ SUGGESTIONS : receives
     USERS ||--o{ PREFERENCES : sets
     USERS ||--o{ CALENDAR_CONNECTIONS : connects
     CALENDAR_CONNECTIONS o|--o{ TASKS : syncs
     CALENDAR_CONNECTIONS o|--o{ SCHEDULES : syncs
     SUGGESTIONS ||--o{ SUGGESTION_TOPICS : tagged_with
+    TOPICS ||--o{ SUGGESTION_TOPICS : categorizes
+    USERS ||--o{ USER_SUGGESTIONS : receives
+    SUGGESTIONS ||--o{ USER_SUGGESTIONS : assigned_as
 ```
 
-Suggestions are linked directly to the **user**; the recommendation engine retrieves skills and interests using `user_id`. Direct suggestion-to-skill joins are unnecessary unless you want to record why each specific recommendation was generated.
+**Topic matching:** `users` → `user_topics` → `topics` ← `suggestion_topics` ← `suggestions`.
+
+**Traceability:** `users` → `user_suggestions` ← `suggestions`. The master catalog stays user-independent, while every delivered recommendation has a user-specific record and optional feedback.
+
+**No `user_interests` or `legacy_suggestions` in the intended final database.** The app has 11 intended public tables: `users`, `user_skills`, `topics`, `user_topics`, `tasks`, `schedules`, `calendar_connections`, `suggestions`, `suggestion_topics`, `user_suggestions`, and `preferences`. OAuth credentials additionally live in a private, backend-only table.
 
 ## 6. Google integration
 
 | Local entity | External service | Key identifiers |
 |---|---|---|
 | Schedule | Google Calendar API | Calendar ID + event ID |
-| Task | Google Tasks API | task ID |
+| Task | Google Tasks API | task-list ID + task ID (add missing task-list field) |
 
 Google Calendar's interface can display dated Google Tasks, but the **Calendar Events API and Google Tasks API are separate**.
 
@@ -205,11 +228,11 @@ The frontend—not the LLM—controls colors, component layout, and user interac
 
 ## 8. Suggested MVP implementation order
 
-1. **Authentication & data model:** Supabase Auth, users, normalized skills/interests, RLS policies.
+1. **Authentication & data model:** Supabase Auth, users, normalized skills, predefined topics, user-topic selections, RLS policies.
 2. **Organizer:** current/next activity logic.
 3. **Google connection & synchronization:** OAuth, Google Calendar + Google Tasks imports and updates, retry/error handling.
 4. **AI chat:** Read schedule & tasks, delete schedule & tasks, create events/tasks with confirmation, use typed response JSON, temporary session context.
-5. **Suggestions:** Retrieve real resources, store links and summaries, feedback, suggestions history.
+5. **Suggestions:** Admin video ingestion and topic tagging, scheduled per-user matching, `user_suggestions` history and feedback.
 6. **Notifications & personalization:** Reminders, preferred content types, feedback-aware ranking.
 7. **Polish:** Conflict resolution, recurring calendar events, performance, better time-aware recommendations.
 
@@ -217,10 +240,10 @@ The frontend—not the LLM—controls colors, component layout, and user interac
 
 - Whether task due time is merely a local deadline or should produce a separate Google Calendar event for a scheduled work block.
 - Whether to support multiple Google accounts/calendars and multiple Google task lists at launch.
-- Whether suggestions have real validity windows or simply creation/history timestamps.
+- Recommendation cadence and whether to prevent repeated assignments of the same video within a daily batch.
 - How to resolve edits made simultaneously in Google and your app.
 - How to handle permissions, expiration, privacy, and retention for external AI and recommendation services.
 
 ## 10. Project summary
 
-The assistant is **an action-oriented productivity app rather than a persistent chatbot**. Its organizer shows tasks and scheduled events; Google APIs keep supported items synchronized; the AI interprets short natural-language requests and returns validated, typed UI data; and saved suggestions/preferences improve recommendations over time, without storing complete chat histories.
+The assistant is **an action-oriented productivity app rather than a persistent chatbot**. Its organizer shows tasks and scheduled events; Google APIs keep supported items synchronized; the AI interprets short natural-language requests and returns validated, typed UI data; and an admin-managed video catalog plus traceable user-specific suggestions and preferences improve recommendations over time, without storing complete chat histories.

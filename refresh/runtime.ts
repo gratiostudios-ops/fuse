@@ -1,3 +1,4 @@
+import { initializeOrganizer, syncOrganizer, subscribeOrganizer } from '../api/organizer';
 import { getSupabaseClient } from '../api/supabase';
 import { getTasks } from '../api/tasks';
 import { getSchedules, SCHEDULES_IMPLEMENTED } from '../api/schedules';
@@ -14,6 +15,10 @@ const coordinator = createRefreshCoordinator({
     return data.session?.user.id ?? null;
   },
   getTopicIds: getRefreshTopicIds,
+  async beforeCollect() {
+    try { await initializeOrganizer(); await syncOrganizer(false, false); }
+    catch { console.warn('Google sync unavailable; using saved organizer data.'); }
+  },
   getTasks,
   getSchedules,
   schedulesImplemented: SCHEDULES_IMPLEMENTED,
@@ -52,6 +57,7 @@ export function initializeRefreshRuntime() {
     previousUserId = userId;
   });
   subscribeTopicChanges(reset);
+  subscribeOrganizer(reason => { if (['completion', 'disconnect', 'timezone'].includes(reason)) reset(); });
   initialized = true;
   return coordinator;
 }

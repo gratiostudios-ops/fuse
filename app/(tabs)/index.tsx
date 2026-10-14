@@ -4,6 +4,7 @@ import { ArrowCircleRightIcon, CaretDownIcon } from 'phosphor-react-native';
 import { colors, fonts } from '../../src/theme';
 import { askAI, type FuseResponse } from '../../api/ai';
 import { useAuth } from '../../src/auth-context';
+import { useOrganizer, OrganizerList, DailyRecapView } from '../../src/organizer';
 import { FuseResponseView } from '../../src/fuse-response';
 import { getLatestRefresh, initializeRefreshRuntime, refreshNow } from '../../refresh/runtime';
 import { subscribeRefresh } from '../../refresh/cache';
@@ -14,6 +15,9 @@ export default function HomeScreen() {
   const [messages, setMessages] = useState<{ role: 'user' | 'assistant'; text: string; response?: FuseResponse }[]>([]);
   const { session } = useAuth();
   const userId = session?.user.id ?? null;
+  const organizer = useOrganizer(userId);
+  const [organizerExpanded, setOrganizerExpanded] = useState(false);
+  useEffect(() => { setOrganizerExpanded(false); }, [userId]);
   const identity = useRef(userId);
   identity.current = userId;
   const [home, setHome] = useState<FuseResponse | null>(null);
@@ -83,15 +87,17 @@ export default function HomeScreen() {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <View style={styles.organizer}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Organizer" accessibilityState={{ expanded: organizerExpanded }} onPress={() => setOrganizerExpanded(value => !value)} style={styles.organizer}>
         <Text style={styles.organizerLabel}>Organizer</Text>
-        <CaretDownIcon size={17} color={colors.foreground} style={styles.caret} />
-      </View>
+        <CaretDownIcon size={17} color={colors.foreground} style={[styles.caret, organizerExpanded && { transform: [{ rotate: '180deg' }] }]} />
+      </Pressable>
+      {!!userId && <OrganizerList controller={organizer} expanded={organizerExpanded} />}
       <View style={styles.blankBody}>
         <View style={styles.homeHeader}>
           <Text style={styles.messageLabel}>For you</Text>
           {!!userId && <Pressable accessibilityRole="button" disabled={homeLoading} onPress={reloadHome}><Text style={styles.messageLabel}>Refresh</Text></Pressable>}
         </View>
+        {!!userId && <DailyRecapView controller={organizer} />}
         {!userId && <Text style={styles.messageText}>Sign in from the account menu to see your tasks and events.</Text>}
         {homeLoading && <Text style={styles.messageText}>Updating Home…</Text>}
         {!!userId && home && <FuseResponseView response={home} />}

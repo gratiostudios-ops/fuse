@@ -6,7 +6,6 @@ import { getSupabaseClient } from '../supabase';
 import { validateSupabaseConfig } from '../config';
 import { assertGoogleProviderEnabled } from './provider';
 
-export const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events.readonly';
 let exchange: { code: string; result: Promise<Session> } | undefined;
 
 export function getGoogleRedirectUri(): string {
@@ -48,7 +47,7 @@ export async function signInWithGoogle(): Promise<{ status: 'signed-in' | 'cance
     provider: 'google',
     options: {
       redirectTo,
-      scopes: `openid email profile ${GOOGLE_CALENDAR_SCOPE}`,
+      scopes: 'openid email profile',
       skipBrowserRedirect: true,
       queryParams: { prompt: 'select_account consent' },
     },

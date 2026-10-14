@@ -11,8 +11,8 @@ export function FuseResponseView({ response }: { response: FuseResponse }) {
       return <View key={`${block.type}:${d.id}`} style={[styles.card, { borderLeftColor: block.type === 'task' ? '#D66767' : block.type === 'schedule' ? '#6596DB' : '#64AA7B' }]}>
         <Text style={styles.label}>{block.type === 'schedule' ? 'Event' : block.type === 'task' ? 'Task' : 'Suggestion'}</Text>
         <Text style={styles.title}>{d.title}</Text>
-        {block.type === 'task' && <Text style={styles.detail}>{block.data.is_completed ? 'Completed · ' : 'Due · '}{block.data.due_date}{block.data.due_time ? ` at ${block.data.due_time.slice(0, 5)}` : ''}</Text>}
-        {block.type === 'schedule' && <Text style={styles.detail}>{new Date(block.data.start).toLocaleString()} – {new Date(block.data.end).toLocaleString()}</Text>}
+        {block.type === 'task' && <Text style={styles.detail}>{block.data.is_completed ? 'Completed · ' : 'Due · '}{block.data.due_date ?? 'No deadline'}{block.data.due_time ? ` at ${block.data.due_time.slice(0, 5)}` : ''}</Text>}
+        {block.type === 'schedule' && <Text style={styles.detail}>{block.data.is_completed ? 'Completed · ' : ''}{block.data.is_all_day ? `All day · ${block.data.start_date}` : `${new Date(block.data.start).toLocaleString()} – ${new Date(block.data.end).toLocaleString()}`}</Text>}
         {block.type === 'suggestion' && <>
           {block.data.duration_minutes !== null && <Text style={styles.detail}>{block.data.duration_minutes} minutes</Text>}
           <Pressable accessibilityRole="link" onPress={() => { void Linking.openURL(block.data.video_url).catch(() => {}); }}>

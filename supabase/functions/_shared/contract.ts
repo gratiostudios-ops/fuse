@@ -1,6 +1,6 @@
 export type Block =
-  | { type: 'task'; data: { id: string; title: string; due_date: string; due_time: string | null; is_completed: boolean } }
-  | { type: 'schedule'; data: { id: string; title: string; start: string; end: string } }
+  | { type: 'task'; data: { id: string; title: string; due_date: string | null; due_time: string | null; is_completed: boolean } }
+  | { type: 'schedule'; data: { id: string; title: string; start: string; end: string; is_completed?: boolean; is_all_day?: boolean; start_date?: string | null; end_date?: string | null } }
   | { type: 'suggestion'; data: { id: string; title: string; video_url: string; thumbnail_url: string | null; duration_minutes: number | null } }
   | { type: 'text'; data: { content: string } };
 export type FuseResponse = { schema_version: 1; message: string; blocks: Block[] };
@@ -28,10 +28,13 @@ export function parseFuseResponse(value: unknown): FuseResponse {
     }
     if (typeof d.id !== 'string' || !d.id || typeof d.title !== 'string') throw new Error('Invalid record block.');
     if (block.type === 'task') {
-      if (!isoDate(d.due_date) || !(d.due_time === null || typeof d.due_time === 'string' && /^\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(d.due_time))
+      if (!(d.due_date === null || isoDate(d.due_date)) || !(d.due_time === null || typeof d.due_time === 'string' && /^\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(d.due_time))
         || typeof d.is_completed !== 'boolean') throw new Error('Invalid task block.');
     } else if (block.type === 'schedule') {
-      if (!timestamp(d.start) || !timestamp(d.end) || Date.parse(d.end as string) < Date.parse(d.start as string)) throw new Error('Invalid schedule block.');
+      if (!timestamp(d.start) || !timestamp(d.end) || Date.parse(d.end as string) < Date.parse(d.start as string)
+        || (d.is_completed !== undefined && typeof d.is_completed !== 'boolean')
+        || (d.is_all_day !== undefined && typeof d.is_all_day !== 'boolean')
+        || (d.is_all_day === true && (!isoDate(d.start_date) || !isoDate(d.end_date)))) throw new Error('Invalid schedule block.');
     } else if (block.type === 'suggestion') {
       if (!safeUrl(d.video_url) || !(d.thumbnail_url === null || safeUrl(d.thumbnail_url))
         || !(d.duration_minutes === null || typeof d.duration_minutes === 'number' && Number.isFinite(d.duration_minutes) && d.duration_minutes >= 0)) throw new Error('Invalid suggestion block.');

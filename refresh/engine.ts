@@ -6,6 +6,7 @@ export const REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 export type RefreshDependencies = {
   getUserId(): Promise<string | null>;
   getTopicIds(): Promise<string[]>;
+  beforeCollect?(): Promise<void>;
   getTasks(): Promise<Task[]>;
   getSchedules(): Promise<Schedule[]>;
   schedulesImplemented: boolean;
@@ -94,6 +95,7 @@ export function createRefreshCoordinator(deps: RefreshDependencies) {
       };
     };
 
+    if (userId) await deps.beforeCollect?.();
     const [tasks, schedules, suggestions] = await Promise.all([
       userId ? collect(deps.getTasks) : Promise.resolve<SourceResult<Task>>({ status: 'skipped', data: [] }),
       userId ? collect(deps.getSchedules, deps.schedulesImplemented ? 'ok' : 'not-implemented') : Promise.resolve<SourceResult<Schedule>>({ status: 'skipped', data: [] }),

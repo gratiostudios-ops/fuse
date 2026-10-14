@@ -9,12 +9,9 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "test:api": "tsx --test api/tests/*.test.ts",
     "test:refresh": "tsx --test refresh/tests/*.test.ts",
-    "test:supabase": "tsx api/smoke-test.ts",
     "export": "expo export",
-    "ai:prompts": "node scripts/sync-ai-prompts.mjs",
-    "test:ai": "tsx --test api/tests/ai.test.ts"
+    "ai:prompts": "node scripts/sync-ai-prompts.mjs"
   },
   "dependencies": {
     "@expo-google-fonts/crimson-pro": "^0.4.2",

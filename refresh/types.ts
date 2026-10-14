@@ -10,6 +10,7 @@ export type SourceResult<T> = {
 
 export type RefreshSnapshot = {
   userId: string | null;
+  connectionId: string | null;
   collectedAt: string;
   topicIds: string[];
   tasks: SourceResult<Task>;
@@ -23,7 +24,7 @@ export type ProcessingResult =
   | { status: 'error'; error: string };
 
 export type CachedRefresh = {
-  version: 1;
+  version: 2;
   completedAt: string;
   snapshot: RefreshSnapshot;
   processing: ProcessingResult;

@@ -1,3 +1,4 @@
+//exposes api endpoints
 export { getSuggestions } from './suggestions';
 export { getTasks } from './tasks';
 export { getSchedules } from './schedules';

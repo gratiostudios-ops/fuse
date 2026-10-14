@@ -1,10 +1,8 @@
-import { getSupabaseClient } from '../supabase';
+import { loadOrganizer } from '../organizer';
 import type { Schedule } from '../types';
-import { querySchedules } from './query';
-
-export const SCHEDULES_IMPLEMENTED = true;
-
-/** Read authenticated schedules from Supabase; Google synchronization is separate. */
 export async function getSchedules(): Promise<Schedule[]> {
-  return querySchedules(getSupabaseClient());
+  const state = await loadOrganizer();
+  const source = state.source_status.calendar;
+  if (source !== 'ok') throw new Error(state.source_errors.calendar ?? 'Connect Google Calendar and Tasks.');
+  return state.schedules;
 }

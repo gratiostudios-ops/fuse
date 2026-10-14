@@ -12,9 +12,9 @@ function video(id: string): Suggestion {
 }
 
 function ownedTask(userId: string): Task {
-  return { id: 'task-1', user_id: userId, title: 'Task', description: null,
-    due_date: '2026-10-13', due_time: null, mark_completed: false, google_connection_id: null,
-    google_task_id: null, sync_status: 'synced', created_at: '2026-10-13T00:00:00Z', updated_at: '2026-10-13T00:00:00Z' };
+  return { id: `google:task:${userId}:task-1`, title: 'Task', description: null,
+    due_date: '2026-10-13', mark_completed: false, google_tasklist_id: userId,
+    google_task_id: 'task-1', source_updated_at: '2026-10-13T00:00:00Z' };
 }
 
 function deferred() {
@@ -29,9 +29,10 @@ function fixture(userId: string | null = null) {
   const deps: RefreshDependencies = {
     getUserId: async () => state.userId,
     getTopicIds: async () => state.topics,
-    getTasks: async () => { calls.tasks++; return [ownedTask(state.userId!)]; },
-    getSchedules: async () => { calls.schedules++; return []; },
-    schedulesImplemented: false,
+    getConnectionId: async () => state.userId ? `connection:${state.userId}` : null,
+    getOrganizer: async () => { calls.tasks++; calls.schedules++; return {
+      tasks: { status: 'ok', data: [ownedTask(state.userId!)] }, schedules: { status: 'ok', data: [] }, connectionId: `connection:${state.userId}`,
+    }; },
     getSuggestions: async topic => { calls.suggestions.push(topic); return [video('shared'), video(topic)]; },
     process: async snapshot => { calls.snapshots.push(snapshot); return { status: 'completed' }; },
     readCache: async () => state.cache,
@@ -56,13 +57,13 @@ test('signed-out refresh collects only public suggestions and deduplicates topic
   assert.equal(result.record?.processing.status, 'completed');
 });
 
-test('signed-in refresh collects owned tasks and marks the schedules placeholder', async () => {
+test('signed-in refresh collects both Google sources in one response', async () => {
   const { calls, deps } = fixture('alice');
   const result = await createRefreshCoordinator(deps).run();
   assert.equal(calls.tasks, 1);
   assert.equal(calls.schedules, 1);
-  assert.equal(result.record?.snapshot.tasks.data[0].user_id, 'alice');
-  assert.equal(result.record?.snapshot.schedules.status, 'not-implemented');
+  assert.equal(result.record?.snapshot.tasks.data[0].google_tasklist_id, 'alice');
+  assert.equal(result.record?.snapshot.schedules.status, 'ok');
 });
 
 test('fresh data skips refresh until 30 minutes have elapsed, unless forced', async () => {
@@ -93,7 +94,7 @@ test('overlapping foreground/background calls share one run', async () => {
 test('logout during collection discards private data before processing or saving', async () => {
   const { state, calls, deps } = fixture('alice');
   const gate = deferred();
-  deps.getTasks = async () => { await gate.promise; return [ownedTask('alice')]; };
+  const original = deps.getOrganizer; deps.getOrganizer = async () => { await gate.promise; return original(); };
   const runner = createRefreshCoordinator(deps);
   const pending = runner.run();
   await new Promise(resolve => setImmediate(resolve));
@@ -108,7 +109,7 @@ test('logout during collection discards private data before processing or saving
 test('a forced login/topic refresh queues after an in-flight run without overlap', async () => {
   const { state, calls, deps } = fixture('alice');
   const gate = deferred();
-  deps.getTasks = async () => { calls.tasks++; await gate.promise; return [ownedTask('alice')]; };
+  const original = deps.getOrganizer; deps.getOrganizer = async () => { await gate.promise; return original(); };
   const runner = createRefreshCoordinator(deps);
   const pending = runner.run();
   await new Promise(resolve => setImmediate(resolve));
@@ -142,7 +143,7 @@ test('account/topic changes during AI processing discard its result', async () =
 
 test('source failures keep successful data without treating network errors as logout', async () => {
   const { deps } = fixture('alice');
-  deps.getTasks = async () => { throw new Error('Network unavailable'); };
+  deps.getOrganizer = async () => ({ tasks: { status: 'error', data: [], error: 'Network unavailable' }, schedules: { status: 'ok', data: [] }, connectionId: 'connection:alice' });
   deps.getSuggestions = async topic => {
     if (topic === 'topic-b') throw new Error('Topic fetch failed');
     return [video('successful')];
@@ -158,7 +159,7 @@ test('source failures keep successful data without treating network errors as lo
 
 test('authentication failures are distinct from source/network failures', async () => {
   const { deps } = fixture('alice');
-  deps.getTasks = async () => { throw Object.assign(new Error('Login required'), { code: 'AUTHENTICATION_REQUIRED' }); };
+  deps.getOrganizer = async () => ({ tasks: { status: 'authentication-required', data: [], error: 'Reconnect Google' }, schedules: { status: 'ok', data: [] }, connectionId: 'connection:alice' });
   const result = await createRefreshCoordinator(deps).run();
   assert.equal(result.record?.snapshot.tasks.status, 'authentication-required');
   assert.deepEqual(result.record?.snapshot.tasks.data, []);
@@ -179,7 +180,7 @@ test('cached private data is unavailable after changing accounts and is replaced
   state.userId = 'bob';
   assert.equal(await runner.latest(), null);
   const result = await runner.run();
-  assert.equal(result.record?.snapshot.tasks.data[0].user_id, 'bob');
+  assert.equal(result.record?.snapshot.tasks.data[0].google_tasklist_id, 'bob');
 });
 
 test('session initialization errors abort rather than impersonating a signed-out user', async () => {
@@ -234,4 +235,45 @@ test('switching accounts and back still invalidates the original generation', as
   gate.release();
   assert.equal((await pending).status, 'discarded');
   assert.equal(state.cache, null);
+});
+
+
+test('changing Google connections hides and replaces cached activity for the same app user', async () => {
+  const { state, deps } = fixture('alice');
+  let connection = 'google-one';
+  deps.getConnectionId = async () => connection;
+  deps.getOrganizer = async () => ({ tasks: { status: 'ok', data: [ownedTask(connection)] }, schedules: { status: 'ok', data: [] }, connectionId: connection });
+  const runner = createRefreshCoordinator(deps);
+  await runner.run();
+  connection = 'google-two';
+  assert.equal(await runner.latest(), null);
+  assert.equal((await runner.run()).record?.snapshot.connectionId, 'google-two');
+  assert.equal(state.cache?.snapshot.tasks.data[0].google_tasklist_id, 'google-two');
+});
+
+test('Calendar failure preserves tasks and suggestions from the same collection', async () => {
+  const { deps } = fixture('alice');
+  deps.getOrganizer = async () => ({ tasks: { status: 'ok', data: [ownedTask('alice')] }, schedules: { status: 'error', data: [], error: 'Calendar unavailable' }, connectionId: 'connection:alice' });
+  const result = await createRefreshCoordinator(deps).run();
+  assert.equal(result.status, 'partial');
+  assert.equal(result.record?.snapshot.tasks.data.length, 1);
+  assert.equal(result.record?.snapshot.schedules.error, 'Calendar unavailable');
+  assert.equal(result.record?.snapshot.suggestions.data.length, 3);
+});
+
+test('connection lookup failure preserves suggestions and hides the earlier private feed', async () => {
+  const { state, deps } = fixture('alice');
+  const runner = createRefreshCoordinator(deps);
+  await runner.run();
+  deps.getConnectionId = async () => { throw new Error('Organizer transport unavailable'); };
+  deps.getOrganizer = async () => { throw new Error('Organizer transport unavailable'); };
+  assert.equal(await runner.latest(), null);
+  const result = await runner.run();
+  assert.equal(result.status, 'partial');
+  assert.equal(result.record?.snapshot.connectionId, null);
+  assert.equal(result.record?.snapshot.tasks.status, 'error');
+  assert.deepEqual(result.record?.snapshot.tasks.data, []);
+  assert.equal(result.record?.snapshot.suggestions.data.length, 3);
+  assert.equal(state.cache?.snapshot.connectionId, null);
+  assert.equal(await runner.latest(), null);
 });

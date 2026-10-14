@@ -35,7 +35,7 @@ const validStamp = (value: unknown): string | null => typeof value === 'string' 
 export function mapTask(task: GoogleRecord, listId: string) {
   const done = task.status === 'completed';
   return {
-    google_tasklist_id: listId, google_task_id: task.id,
+    id: `google:task:${encodeURIComponent(listId)}:${encodeURIComponent(task.id)}`, google_tasklist_id: listId, google_task_id: task.id,
     title: task.title || 'Untitled task', description: task.notes || null,
     due_date: validStamp(task.due)?.slice(0, 10) ?? null, due_time: null,
     mark_completed: done, completed_at: done ? validStamp(task.completed) : null,
@@ -50,7 +50,7 @@ export function mapEvent(event: GoogleRecord, timezone: string) {
   const end = allDay ? midnight(event.end.date, timezone) : validStamp(event.end?.dateTime);
   if (event.status !== 'cancelled' && (!start || !end || Date.parse(end) < Date.parse(start))) throw new Error('Google returned an invalid event time');
   return {
-    google_calendar_id: 'primary', cal_event_id: event.id,
+    id: `google:event:primary:${encodeURIComponent(event.id)}`, google_calendar_id: 'primary', cal_event_id: event.id,
     title: eventTitle(event.summary || 'Untitled event', false, metadata.fuse_title_managed === 'true'),
     description: event.description || null, valid_from: start, valid_to: end,
     is_all_day: allDay, start_date: allDay ? event.start.date : null, end_date: allDay ? event.end.date : null,
@@ -59,23 +59,17 @@ export function mapEvent(event: GoogleRecord, timezone: string) {
     source_updated_at: validStamp(event.updated), source_deleted: event.status === 'cancelled',
   };
 }
-export function recapActivities(tasks: GoogleRecord[], events: GoogleRecord[], history: GoogleRecord[], date: string, timezone: string) {
+export function recapActivities(tasks: GoogleRecord[], events: GoogleRecord[], date: string, timezone: string) {
   const start = Date.parse(midnight(date, timezone));
   const next = addDays(date, 1), after = addDays(date, 2);
   const end = Date.parse(midnight(next, timezone)), tomorrowEnd = Date.parse(midnight(after, timezone));
-  const latest = new Map<string, GoogleRecord>();
-  for (const h of history) {
-    const key = `${h.kind}:${h.item_id}`;
-    const previous = latest.get(key);
-    if (!previous || BigInt(h.id) > BigInt(previous.id)) latest.set(key, h);
-  }
-  const completed = [...latest.values()].filter(h => h.completed && h.completed_at
-    && Date.parse(h.completed_at) >= start && Date.parse(h.completed_at) < end)
-    .map(h => ({ kind: h.kind, id: h.item_id, title: h.snapshot.title, completed_at: h.completed_at }));
+  const completionRecords: GoogleRecord[] = [...tasks.map(t => ({ ...t, kind: 'task' })), ...events.map(e => ({ ...e, kind: 'schedule' }))];
+  const completed = completionRecords.filter(t => t.mark_completed && !t.source_deleted && t.completed_at && Date.parse(t.completed_at) >= start && Date.parse(t.completed_at) < end)
+    .map(t => ({ kind: t.kind, id: t.id, title: t.title, completed_at: t.completed_at }));
   const activeTasks = tasks.filter(t => !t.mark_completed && !t.source_deleted);
   return {
     completed_today: completed,
-    tomorrow_tasks: activeTasks.filter(t => t.due_date === next).map(t => ({ id: t.id, title: t.title, due_date: t.due_date, due_time: t.due_time })),
+    tomorrow_tasks: activeTasks.filter(t => t.due_date === next).map(t => ({ id: t.id, title: t.title, due_date: t.due_date })),
     overdue_tasks: activeTasks.filter(t => t.due_date && t.due_date < next).map(t => ({ id: t.id, title: t.title, due_date: t.due_date })),
     tomorrow_events: events.filter(e => !e.mark_completed && !e.source_deleted &&
       (e.is_all_day ? e.start_date < after && e.end_date > next : Date.parse(e.valid_from) < tomorrowEnd && Date.parse(e.valid_to) > end))

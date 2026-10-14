@@ -1,6 +1,7 @@
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import { getSupabaseClient } from './supabase';
 import { parseFuseResponse, type FuseResponse } from '../supabase/functions/_shared/contract';
+import { clearOrganizerCache, notifyOrganizerChanged } from './organizer';
 export type { FuseResponse, Block } from '../supabase/functions/_shared/contract';
 
 export type ChatTurn = { role: 'user' | 'assistant'; text: string };
@@ -35,5 +36,13 @@ async function invokeAI(body: object): Promise<FuseResponse> {
     throw new Error(`Fuse AI (${error.context.status}): ${reason}`);
   }
   if (error) throw error;
-  return parseFuseResponse(data);
+  const response = parseFuseResponse(data);
+  if (body && 'mode' in body && body.mode === 'chat' && data?.activity_changed === true) {
+    const { data: { session: current } } = await client.auth.getSession();
+    if (current?.user.id === session.user.id) {
+      clearOrganizerCache();
+      notifyOrganizerChanged('creation');
+    }
+  }
+  return response;
 }

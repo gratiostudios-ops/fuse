@@ -14,7 +14,7 @@ export async function readRefreshCache(): Promise<CachedRefresh | null> {
   if (!value) return null;
   try {
     const record = JSON.parse(value) as CachedRefresh;
-    if (record.version !== 1 || !record.snapshot || !Array.isArray(record.snapshot.topicIds) || !Number.isFinite(Date.parse(record.completedAt))) return null;
+    if (record.version !== 2 || !record.snapshot || !Array.isArray(record.snapshot.topicIds) || !Number.isFinite(Date.parse(record.completedAt))) { await authStorage.removeItem(CACHE_KEY); return null; }
     return record;
   } catch { return null; }
 }

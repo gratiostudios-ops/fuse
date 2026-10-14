@@ -4,5 +4,5 @@
 verify_jwt = false
 
 [functions.organizer]
-# GET is Google's OAuth callback. POST verifies user JWTs or a dedicated cron secret.
+# POST verifies user JWTs or the dedicated recap scheduler secret; Supabase handles OAuth.
 verify_jwt = false

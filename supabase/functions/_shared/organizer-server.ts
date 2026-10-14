@@ -80,9 +80,6 @@ export async function decrypt(value: string) {
   const result = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bytes(iv) }, await encryptionKey(), bytes(data));
   return new TextDecoder().decode(result);
 }
-export async function challenge(verifier: string) {
-  return base64(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
-}
 export async function googleToken(parameters: Record<string, string>) {
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

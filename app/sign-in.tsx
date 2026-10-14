@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GoogleLogoIcon } from 'phosphor-react-native';
 import { signInWithGoogle, signOut } from '../api/auth';
 import { useAuth } from '../src/auth-context';
-import { connectOrganizer, disconnectOrganizer, saveOrganizerTimezone } from '../api/organizer';
+import { connectOrganizer, disconnectOrganizer, retryGoogleRegistration, saveOrganizerTimezone } from '../api/organizer';
 import { useOrganizer } from '../src/organizer';
 import { colors, fonts } from '../src/theme';
 
@@ -54,24 +54,27 @@ export default function SignInScreen() {
       <View style={styles.body}>
         <Text accessibilityRole="header" style={styles.title}>Your Google account</Text>
         <Text style={styles.description}>
-          {session ? `Signed in as ${session.user.email ?? 'your Google account'}.` : 'Sign in with Google, then connect Calendar and Tasks to sync your organizer.'}
+          {session ? `Signed in as ${session.user.email ?? 'your Google account'}.` : 'Connect Google Calendar to sign in and authorize Calendar and Tasks together.'}
         </Text>
         {loading ? <ActivityIndicator color={colors.foreground} /> : (
           <Pressable accessibilityRole="button" disabled={busy} onPress={session ? disconnect : connect} style={[styles.button, busy && styles.busy]}>
             {busy ? <ActivityIndicator color={colors.background} /> : <>
               {!session && <GoogleLogoIcon size={20} color={colors.background} />}
-              <Text style={styles.buttonText}>{session ? 'Sign out' : 'Continue with Google'}</Text>
+              <Text style={styles.buttonText}>{session ? 'Sign out' : 'Connect Google Calendar'}</Text>
             </>}
           </Pressable>
         )}
         {session && <>
-          <Text style={styles.description}>{organizer.loading ? 'Checking Google connection…' : !organizer.state ? 'Google connection status could not be loaded.' : organizer.state.connection?.connection_status === 'connected' ? `Calendar connected: ${organizer.state.connection.google_acc}` : organizer.state.connection?.connection_status === 'reconnect_required' ? 'Google access has expired. Reconnect Calendar and Tasks.' : 'Google Calendar and Tasks are not connected.'}</Text>
+          <Text style={styles.description}>{organizer.loading ? 'Checking Google connection…' : !organizer.state ? 'Google connection status could not be loaded.' : organizer.state.connection?.connection_status === 'connected' ? `Calendar connected: ${organizer.state.connection.google_acc}` : organizer.state.connection?.connection_status === 'reconnect_required' ? 'Calendar connection incomplete. Reconnect Google Calendar.' : 'Google Calendar and Tasks are not connected.'}</Text>
           {!!organizer.state?.connection?.last_error && <Text accessibilityRole="alert" style={styles.message}>{organizer.state.connection.last_error}</Text>}
-          <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void integration(async () => { await connectOrganizer(); setMessage('Finish granting Calendar and Tasks permissions in the Google page, then return here.'); }); }} style={styles.back}>
-            <Text style={styles.backText}>Connect / reconnect Calendar and Tasks</Text>
+          <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void integration(async () => { const result = await connectOrganizer(); if (result.status === 'cancelled') setMessage('Connection cancelled. You can try again.'); }); }} style={styles.back}>
+            <Text style={styles.backText}>Connect Google Calendar</Text>
           </Pressable>
+          {organizer.state?.connection?.connection_status !== 'connected' && <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void integration(retryGoogleRegistration); }} style={styles.back}>
+            <Text style={styles.backText}>Retry Calendar connection</Text>
+          </Pressable>}
           {organizer.state?.connection?.connection_status !== 'disconnected' && organizer.state?.connection && <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void integration(disconnectOrganizer); }} style={styles.back}>
-            <Text style={styles.backText}>Disconnect calendar syncing</Text>
+            <Text style={styles.backText}>Disconnect Google Calendar</Text>
           </Pressable>}
           <Text style={styles.description}>Daily recap time zone (9 PM)</Text>
           <TextInput accessibilityLabel="Daily recap time zone" style={styles.timezone} value={timezone} onChangeText={setTimezone} autoCapitalize="none" placeholder="Asia/Kolkata" placeholderTextColor={colors.placeholder} />

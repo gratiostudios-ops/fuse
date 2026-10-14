@@ -1,18 +1,17 @@
 import { getSupabaseClient } from './supabase';
 import { FunctionsHttpError } from '@supabase/supabase-js';
-import { Platform } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
+import { signInWithGoogle } from './auth/google';
 import type { Task, Schedule } from './types';
 
 export type OrganizerConnection = {
-  id: string; google_acc: string | null; connection_status: string;
+  id: string; google_account_id?: string; updated_at?: string; google_acc: string | null; connection_status: string;
   last_calendar_sync_at: string | null; last_tasks_sync_at: string | null; last_error: string | null;
 };
 export type DailyRecap = {
   local_date: string; timezone: string; completed_today: string; tomorrow_plan: string;
   generated_at: string; source_status: Record<string, string>;
 };
-export type OrganizerState = { tasks: Task[]; schedules: Schedule[]; connection: OrganizerConnection | null; recap: DailyRecap | null; timezone: string };
+export type OrganizerState = { tasks: Task[]; schedules: Schedule[]; connection: OrganizerConnection | null; recap: DailyRecap | null; timezone: string; fetched_at: string; source_status: { tasks: 'ok' | 'error' | 'not_connected'; calendar: 'ok' | 'error' | 'not_connected' }; source_errors: { tasks?: string; calendar?: string } };
 const listeners = new Set<(reason: string) => void>();
 export const notifyOrganizerChanged = (reason = 'sync') => { for (const listener of listeners) listener(reason); };
 export const subscribeOrganizer = (listener: (reason: string) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
@@ -30,57 +29,57 @@ export async function organizerAction<T>(body: object): Promise<T> {
   if (error) throw error;
   return data as T;
 }
-// The public database types intentionally cover only existing catalog tables; these
-// additions are read through the same authenticated REST API until generated types exist.
-export async function loadOrganizer(): Promise<OrganizerState> {
-  const client = getSupabaseClient();
-  const { data: { user }, error } = await client.auth.getUser();
+let latestOrganizer: { userId: string; state: OrganizerState } | null = null;
+let organizerGeneration = 0;
+let organizerRead: { userId: string; generation: number; promise: Promise<OrganizerState> } | null = null;
+export function clearOrganizerCache() { latestOrganizer = null; organizerGeneration++; organizerRead = null; }
+export async function loadOrganizer(force = false): Promise<OrganizerState> {
+  const { data: { session }, error } = await getSupabaseClient().auth.getSession();
   if (error) throw error;
-  if (!user) throw new Error('Sign in to use your organizer.');
-  const [{ getTasks }, { getSchedules }] = await Promise.all([import('./tasks'), import('./schedules')]);
-  const rest = async (table: string, params: Record<string, string>) => {
-    const { data: { session } } = await client.auth.getSession();
-    if (!session || session.user.id !== user.id) throw new Error('Account changed. Refresh your organizer.');
-    const response = await fetch(`${process.env.EXPO_PUBLIC_SUPABASE_URL}/rest/v1/${table}?${new URLSearchParams({ select: '*', user_id: `eq.${user.id}`, ...params })}`, {
-      headers: { apikey: process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY!, Authorization: `Bearer ${session.access_token}` }, signal: AbortSignal.timeout(15000),
-    });
-    if (!response.ok) throw new Error('Organizer setup is incomplete or temporarily unavailable.');
-    const rows = await response.json(); if (!Array.isArray(rows)) throw new Error('Invalid organizer response'); return rows;
-  };
-  const [tasks, schedules, connections, recaps, settings] = await Promise.all([
-    getTasks(), getSchedules(), rest('calendar_connections', { select: 'id,google_acc,connection_status,last_calendar_sync_at,last_tasks_sync_at,last_error', limit: '1' }),
-    rest('organizer_daily_recaps', { order: 'local_date.desc', limit: '1' }), rest('organizer_settings', { select: 'timezone', limit: '1' }),
-  ]);
-  return { tasks: tasks.filter(t => !t.source_deleted), schedules: schedules.filter(s => !s.source_deleted),
-    connection: connections[0] ?? null, recap: recaps[0] ?? null, timezone: settings[0]?.timezone ?? deviceTimezone() };
+  if (!session) { clearOrganizerCache(); throw new Error('Sign in to use your organizer.'); }
+  if (!force && latestOrganizer?.userId === session.user.id && Date.now() - Date.parse(latestOrganizer.state.fetched_at) < 30 * 60 * 1000) return latestOrganizer.state;
+  const generation = organizerGeneration;
+  if (organizerRead?.userId === session.user.id && organizerRead.generation === generation) return organizerRead.promise;
+  const promise = (async () => {
+    const state = await organizerAction<OrganizerState>({ action: 'activities' });
+    const { data: { session: current } } = await getSupabaseClient().auth.getSession();
+    if (current?.user.id !== session.user.id || generation !== organizerGeneration) throw new Error('Google connection changed. Refresh your organizer.');
+    latestOrganizer = { userId: session.user.id, state };
+    return state;
+  })().finally(() => { if (organizerRead?.promise === promise) organizerRead = null; });
+  organizerRead = { userId: session.user.id, generation, promise };
+  return promise;
+}
+export async function retryGoogleRegistration() {
+  const { data: { session }, error } = await getSupabaseClient().auth.getSession();
+  if (error) throw error;
+  if (!session) throw new Error('Sign in to connect Google Calendar.');
+  return registerGoogleCredentials(session);
+}
+
+export async function registerGoogleCredentials(session: import('@supabase/supabase-js').Session) {
+  const result = await organizerAction<{ status: string; connection?: OrganizerConnection }>({ action: 'register-google', provider_token: session.provider_token, provider_refresh_token: session.provider_refresh_token });
+  clearOrganizerCache(); notifyOrganizerChanged('connection');
+  if (result.status !== 'connected') throw new Error('Calendar connection incomplete. Reconnect Google Calendar to grant Calendar and Tasks access.');
+  return result;
 }
 export async function initializeOrganizer() { await organizerAction({ action: 'initialize', timezone: deviceTimezone() }); }
 export async function syncOrganizer(force = false, notify = true) {
-  const result = await organizerAction<{ status: string; error?: string }>({ action: 'sync', force });
-  if (notify) notifyOrganizerChanged();
+  const result = await loadOrganizer(force);
+  if (notify) notifyOrganizerChanged(force ? 'manual-refresh' : 'refresh');
   return result;
 }
-export async function setOrganizerCompletion(kind: 'task' | 'schedule', id: string, completed: boolean) {
-  const item = await organizerAction<Task | Schedule>({ action: 'complete', kind, id, completed });
-  notifyOrganizerChanged('completion'); return item;
+export async function setOrganizerCompletion(kind: 'task' | 'schedule', item: Task | Schedule, completed: boolean) {
+  const source = kind === 'task'
+    ? { taskListId: (item as Task).google_tasklist_id, taskId: (item as Task).google_task_id }
+    : { calendarId: (item as Schedule).google_calendar_id, eventId: (item as Schedule).cal_event_id };
+  const saved = await organizerAction<Task | Schedule>({ action: 'complete', kind, ...source, completed });
+  clearOrganizerCache(); notifyOrganizerChanged('completion'); return saved;
 }
 export async function requestDailyRecap() {
   const result = await organizerAction<{ recap: DailyRecap | null; message?: string }>({ action: 'recap' });
   notifyOrganizerChanged(); return result;
 }
-export async function connectOrganizer() {
-  // Open a blank tab synchronously on web to avoid popup blockers after the request.
-  const popup = Platform.OS === 'web' ? window.open('about:blank', '_blank') : null;
-  try {
-    await initializeOrganizer();
-    const { url } = await organizerAction<{ url: string }>({ action: 'connect' });
-    const parsed = new URL(url);
-    if (parsed.origin !== 'https://accounts.google.com') throw new Error('Invalid Google authorization URL');
-    if (Platform.OS === 'web') {
-      if (!popup) throw new Error('Allow popups to connect Google Calendar.');
-      popup.opener = null; popup.location.href = url;
-    } else { await WebBrowser.openBrowserAsync(url); notifyOrganizerChanged(); }
-  } catch (error) { popup?.close(); throw error; }
-}
-export async function disconnectOrganizer() { await organizerAction({ action: 'disconnect' }); notifyOrganizerChanged('disconnect'); }
+export async function connectOrganizer() { return signInWithGoogle(); }
+export async function disconnectOrganizer() { await organizerAction({ action: 'disconnect' }); clearOrganizerCache(); notifyOrganizerChanged('disconnect'); }
 export async function saveOrganizerTimezone(timezone: string) { await organizerAction({ action: 'timezone', timezone }); notifyOrganizerChanged('timezone'); }

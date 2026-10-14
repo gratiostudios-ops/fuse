@@ -1,7 +1,5 @@
-import { initializeOrganizer, syncOrganizer, subscribeOrganizer } from '../api/organizer';
+import { loadOrganizer, clearOrganizerCache, subscribeOrganizer } from '../api/organizer';
 import { getSupabaseClient } from '../api/supabase';
-import { getTasks } from '../api/tasks';
-import { getSchedules, SCHEDULES_IMPLEMENTED } from '../api/schedules';
 import { getSuggestions } from '../api/suggestions';
 import { clearRefreshCache, readRefreshCache, saveRefreshCache } from './cache';
 import { createRefreshCoordinator } from './engine';
@@ -15,13 +13,18 @@ const coordinator = createRefreshCoordinator({
     return data.session?.user.id ?? null;
   },
   getTopicIds: getRefreshTopicIds,
-  async beforeCollect() {
-    try { await initializeOrganizer(); await syncOrganizer(false, false); }
-    catch { console.warn('Google sync unavailable; using saved organizer data.'); }
+  async getConnectionId() {
+    const state = await loadOrganizer();
+    return state.connection?.connection_status === 'connected' ? `${state.connection.id}:${state.connection.google_account_id ?? state.connection.google_acc ?? ''}:${state.connection.updated_at ?? ''}` : null;
   },
-  getTasks,
-  getSchedules,
-  schedulesImplemented: SCHEDULES_IMPLEMENTED,
+  async getOrganizer() {
+    const state = await loadOrganizer();
+    const source = <T,>(name: 'tasks' | 'calendar', data: T[]): import('./types').SourceResult<T> => ({
+      status: state.source_status[name] === 'ok' ? 'ok' : state.source_status[name] === 'not_connected' ? 'authentication-required' : 'error',
+      data, ...(state.source_errors[name] ? { error: state.source_errors[name] } : {}),
+    });
+    return { tasks: source('tasks', state.tasks), schedules: source('calendar', state.schedules), connectionId: state.connection?.connection_status === 'connected' ? `${state.connection.id}:${state.connection.google_account_id ?? state.connection.google_acc ?? ''}:${state.connection.updated_at ?? ''}` : null };
+  },
   getSuggestions: topicId => getSuggestions({ topicId }),
   process: processRefreshSnapshot,
   async readCache() {
@@ -42,8 +45,9 @@ export function initializeRefreshRuntime() {
   if (initialized) return coordinator;
   const client = getSupabaseClient();
   let previousUserId: string | null | undefined;
-  const reset = () => {
+  const reset = (keepOrganizer = false) => {
     coordinator.invalidate();
+    if (!keepOrganizer) clearOrganizerCache();
     // Do not call async Supabase auth methods inside onAuthStateChange's lock.
     queueMicrotask(() => {
       void clearRefreshCache().then(() => coordinator.run({ force: true })).catch(() => {
@@ -56,13 +60,14 @@ export function initializeRefreshRuntime() {
     if (previousUserId !== undefined && userId !== previousUserId) reset();
     previousUserId = userId;
   });
-  subscribeTopicChanges(reset);
-  subscribeOrganizer(reason => { if (['completion', 'disconnect', 'timezone'].includes(reason)) reset(); });
+  subscribeTopicChanges(() => reset());
+  subscribeOrganizer(reason => { if (['creation', 'completion', 'disconnect', 'timezone', 'connection', 'signout', 'manual-refresh'].includes(reason)) reset(reason === 'manual-refresh'); });
   initialized = true;
   return coordinator;
 }
 
 export function refreshNow() {
+  clearOrganizerCache();
   return initializeRefreshRuntime().run({ force: true });
 }
 

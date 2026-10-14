@@ -6,10 +6,8 @@ export const REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 export type RefreshDependencies = {
   getUserId(): Promise<string | null>;
   getTopicIds(): Promise<string[]>;
-  beforeCollect?(): Promise<void>;
-  getTasks(): Promise<Task[]>;
-  getSchedules(): Promise<Schedule[]>;
-  schedulesImplemented: boolean;
+  getOrganizer(): Promise<{ tasks: SourceResult<Task>; schedules: SourceResult<Schedule>; connectionId: string | null }>;
+  getConnectionId(): Promise<string | null>;
   getSuggestions(topicId: string): Promise<Suggestion[]>;
   process(snapshot: RefreshSnapshot): Promise<ProcessingResult>;
   readCache(): Promise<CachedRefresh | null>;
@@ -28,8 +26,8 @@ function normalizeTopics(ids: string[]): string[] {
   return [...new Set(ids)].sort();
 }
 
-function contextKey(userId: string | null, topicIds: string[]): string {
-  return JSON.stringify([userId, normalizeTopics(topicIds)]);
+function contextKey(userId: string | null, topicIds: string[], connectionId: string | null = null): string {
+  return JSON.stringify([userId, connectionId, normalizeTopics(topicIds)]);
 }
 
 async function collect<T>(operation: () => Promise<T[]>, status: 'ok' | 'not-implemented' = 'ok'): Promise<SourceResult<T>> {
@@ -47,13 +45,22 @@ export function createRefreshCoordinator(deps: RefreshDependencies) {
   let forceAgain = false;
   let acceptingForce = false;
 
+  async function connectionScope(userId: string | null): Promise<string | null> {
+    if (!userId) return null;
+    try { return await deps.getConnectionId(); }
+    catch { return null; }
+  }
+
   async function latest(): Promise<CachedRefresh | null> {
     const startGeneration = generation;
     const userId = await deps.getUserId();
     const topicIds = await deps.getTopicIds();
+    let connectionId: string | null;
+    try { connectionId = userId ? await deps.getConnectionId() : null; }
+    catch { return null; } // An unverified connection must never expose an earlier private feed.
     const record = await deps.readCache();
     if (!record || startGeneration !== generation) return null;
-    if (contextKey(record.snapshot.userId, record.snapshot.topicIds) !== contextKey(userId, topicIds)) return null;
+    if (contextKey(record.snapshot.userId, record.snapshot.topicIds, record.snapshot.connectionId) !== contextKey(userId, topicIds, connectionId)) return null;
     if (await deps.getUserId() !== userId || startGeneration !== generation) return null;
     return record;
   }
@@ -62,15 +69,16 @@ export function createRefreshCoordinator(deps: RefreshDependencies) {
     const startGeneration = generation;
     const userId = await deps.getUserId(); // Network/session failures abort, never imply logout.
     const topicIds = normalizeTopics(await deps.getTopicIds());
-    const scope = contextKey(userId, topicIds);
+    const connectionId = await connectionScope(userId);
+    const scope = contextKey(userId, topicIds, connectionId);
     const cached = await deps.readCache();
-    if (cached && contextKey(cached.snapshot.userId, cached.snapshot.topicIds) !== scope) await deps.clearCache();
-    if (!force && cached && contextKey(cached.snapshot.userId, cached.snapshot.topicIds) === scope) {
+    if (cached && contextKey(cached.snapshot.userId, cached.snapshot.topicIds, cached.snapshot.connectionId) !== scope) await deps.clearCache();
+    if (!force && cached && contextKey(cached.snapshot.userId, cached.snapshot.topicIds, cached.snapshot.connectionId) === scope) {
       const age = deps.now() - Date.parse(cached.completedAt);
       if (age >= 0 && age < REFRESH_INTERVAL_MS) return { status: 'skipped', reason: 'not-due' };
     }
 
-    const unchanged = async () => startGeneration === generation && scope === contextKey(await deps.getUserId(), await deps.getTopicIds()) && startGeneration === generation;
+    const unchanged = async () => startGeneration === generation && scope === contextKey(await deps.getUserId(), await deps.getTopicIds(), await connectionScope(userId)) && startGeneration === generation;
 
     const publicSuggestions = async (): Promise<SourceResult<Suggestion>> => {
       if (topicIds.length === 0) return { status: 'no-topics', data: [] };
@@ -95,21 +103,22 @@ export function createRefreshCoordinator(deps: RefreshDependencies) {
       };
     };
 
-    if (userId) await deps.beforeCollect?.();
-    const [tasks, schedules, suggestions] = await Promise.all([
-      userId ? collect(deps.getTasks) : Promise.resolve<SourceResult<Task>>({ status: 'skipped', data: [] }),
-      userId ? collect(deps.getSchedules, deps.schedulesImplemented ? 'ok' : 'not-implemented') : Promise.resolve<SourceResult<Schedule>>({ status: 'skipped', data: [] }),
-      publicSuggestions(),
-    ]);
+    const organizer = async () => {
+      if (!userId) return { tasks: { status: 'skipped', data: [] } as SourceResult<Task>, schedules: { status: 'skipped', data: [] } as SourceResult<Schedule>, connectionId: null };
+      try { return await deps.getOrganizer(); }
+      catch (error) { return { tasks: { status: 'error', data: [], error: errorMessage(error) } as SourceResult<Task>, schedules: { status: 'error', data: [], error: errorMessage(error) } as SourceResult<Schedule>, connectionId }; }
+    };
+    const [activity, suggestions] = await Promise.all([organizer(), publicSuggestions()]);
+    const { tasks, schedules } = activity;
     if (!await unchanged()) return { status: 'discarded', reason: 'context-changed' };
 
-    const snapshot: RefreshSnapshot = { userId, topicIds, collectedAt: new Date(deps.now()).toISOString(), tasks, schedules, suggestions };
+    const snapshot: RefreshSnapshot = { userId, connectionId: activity.connectionId, topicIds, collectedAt: new Date(deps.now()).toISOString(), tasks, schedules, suggestions };
     let processing: ProcessingResult;
     try { processing = await deps.process(snapshot); }
     catch (error) { processing = { status: 'error', error: errorMessage(error) }; }
     if (!await unchanged()) return { status: 'discarded', reason: 'context-changed' };
 
-    const record: CachedRefresh = { version: 1, completedAt: new Date(deps.now()).toISOString(), snapshot, processing };
+    const record: CachedRefresh = { version: 2, completedAt: new Date(deps.now()).toISOString(), snapshot, processing };
     await deps.saveCache(record);
     if (!await unchanged()) {
       await deps.clearCache();

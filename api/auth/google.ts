@@ -2,9 +2,9 @@ import { Platform } from 'react-native';
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import type { Session } from '@supabase/supabase-js';
-import { getSupabaseClient } from '../supabase';
-import { validateSupabaseConfig } from '../config';
+import { getSupabaseClient, validateSupabaseConfig } from '../supabase';
 import { assertGoogleProviderEnabled } from './provider';
+import { registerGoogleCredentials } from '../organizer';
 
 let exchange: { code: string; result: Promise<Session> } | undefined;
 
@@ -24,9 +24,11 @@ export function completeGoogleSignIn(callbackUrl: string): Promise<Session> {
   if (!code) return Promise.reject(new Error('Google sign-in returned no authorization code.'));
   // Browser completion and the deep-link route can receive the same code together.
   if (exchange?.code === code) return exchange.result;
-  const result = getSupabaseClient().auth.exchangeCodeForSession(code).then(({ data, error }) => {
+  const result = getSupabaseClient().auth.exchangeCodeForSession(code).then(async ({ data, error }) => {
     if (error) throw error;
     if (!data.session) throw new Error('Google sign-in did not establish a session.');
+    try { await registerGoogleCredentials(data.session); }
+    catch (error) { throw new Error(`Calendar connection incomplete. ${error instanceof Error ? error.message : 'Retry connecting Google Calendar.'}`); }
     return data.session;
   });
   exchange = { code, result };
@@ -47,9 +49,9 @@ export async function signInWithGoogle(): Promise<{ status: 'signed-in' | 'cance
     provider: 'google',
     options: {
       redirectTo,
-      scopes: 'openid email profile',
+      scopes: 'openid email profile https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/tasks',
       skipBrowserRedirect: true,
-      queryParams: { prompt: 'select_account consent' },
+      queryParams: { access_type: 'offline', prompt: 'select_account consent' },
     },
   });
   if (error) throw error;

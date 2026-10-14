@@ -34,13 +34,13 @@ export function useOrganizer(userId: string | null) {
       finally { if (alive && isOwner(userId)) setLoading(false); }
     };
     void initial();
-    const unsubscribe = subscribeOrganizer(() => { if (alive) void reload(); });
+    const unsubscribe = subscribeOrganizer(reason => { if (alive) { if (['disconnect', 'signout', 'connection'].includes(reason)) { request.current++; setState(null); } void reload(); } });
     const resume = async () => {
       if (!alive || !isOwner(userId) || AppState.currentState !== 'active') return;
       try { await syncOrganizer(false); await reload(); }
       catch (reason) { if (alive && isOwner(userId)) setError(reason instanceof Error ? reason.message : 'Could not refresh Google'); }
     };
-    const timer = setInterval(() => { void resume(); }, 30000);
+    const timer = setInterval(() => { void resume(); }, 30 * 60 * 1000);
     const subscription = AppState.addEventListener('change', next => { if (next === 'active') void resume(); });
     const focus = () => { void resume(); };
     if (typeof window !== 'undefined') window.addEventListener('focus', focus);
@@ -49,7 +49,7 @@ export function useOrganizer(userId: string | null) {
   async function refresh() {
     if (busy || !userId) return;
     setBusy('refresh'); setError('');
-    try { const result = await syncOrganizer(true); if (isOwner(userId) && result.error) setError(result.error); await reload(); }
+    try { await syncOrganizer(true); await reload(); }
     catch (reason) { if (isOwner(userId)) setError(reason instanceof Error ? reason.message : 'Refresh failed'); }
     finally { if (isOwner(userId)) setBusy(null); }
   }
@@ -57,7 +57,7 @@ export function useOrganizer(userId: string | null) {
     if (busy || !userId) return;
     setBusy(item.id); setError('');
     try {
-      const saved = await setOrganizerCompletion(kind, item.id, !item.mark_completed);
+      const saved = await setOrganizerCompletion(kind, item, !item.mark_completed);
       if (isOwner(userId)) setState(previous => previous ? { ...previous,
         tasks: previous.tasks.map(t => kind === 'task' && t.id === saved.id ? saved as Task : t),
         schedules: previous.schedules.map(s => kind === 'schedule' && s.id === saved.id ? saved as Schedule : s) } : previous);
@@ -95,9 +95,8 @@ export function OrganizerList({ controller, expanded }: { controller: OrganizerC
   const taskRows = state?.tasks.filter(t => t.mark_completed === completed) ?? [];
   const eventRows = state?.schedules.filter(e => e.mark_completed === completed) ?? [];
   const connection = state?.connection;
-  const lastSync = connection?.last_calendar_sync_at && connection?.last_tasks_sync_at
-    ? new Date(Math.min(Date.parse(connection.last_calendar_sync_at), Date.parse(connection.last_tasks_sync_at))) : null;
-  const stale = !lastSync || Date.now() - lastSync.getTime() > 3600000;
+  const lastRefresh = state?.fetched_at ? new Date(state.fetched_at) : null;
+  const stale = !lastRefresh || Date.now() - lastRefresh.getTime() > 3600000;
   const row = (kind: 'task' | 'schedule', item: Task | Schedule, detail: string) => <View key={`${kind}:${item.id}`} style={styles.row}>
     <Pressable accessibilityRole="checkbox" accessibilityLabel={`${item.mark_completed ? 'Reopen' : 'Complete'} ${item.title}`}
       accessibilityState={{ checked: item.mark_completed, disabled: !!busy }} disabled={!!busy}
@@ -106,23 +105,24 @@ export function OrganizerList({ controller, expanded }: { controller: OrganizerC
     </Pressable>
     <View style={[styles.itemBody, { borderLeftColor: kind === 'task' ? '#D66767' : '#6596DB' }]}>
       <Text style={styles.title}>{item.title}</Text><Text style={styles.detail}>{detail}</Text>
-      {item.sync_status !== 'synced' && <Text style={styles.detail}>{item.sync_status === 'error' ? 'Google update needs attention' : 'Google update pending'}</Text>}
     </View>
   </View>;
   return <View style={styles.list}>
     <View style={styles.toolbar}>
       <Pressable accessibilityRole="button" accessibilityState={{ selected: !completed }} onPress={() => setCompleted(false)} style={styles.action}><Text style={!completed ? styles.active : styles.detail}>To do</Text></Pressable>
       <Pressable accessibilityRole="button" accessibilityState={{ selected: completed }} onPress={() => setCompleted(true)} style={styles.action}><Text style={completed ? styles.active : styles.detail}>Completed</Text></Pressable>
-      <Pressable accessibilityRole="button" disabled={!!busy} onPress={() => { void refresh(); }} style={styles.action}><Text style={styles.detail}>{busy === 'refresh' ? 'Syncing…' : 'Refresh'}</Text></Pressable>
+      <Pressable accessibilityRole="button" disabled={!!busy} onPress={() => { void refresh(); }} style={styles.action}><Text style={styles.detail}>{busy === 'refresh' ? 'Refreshing…' : 'Refresh'}</Text></Pressable>
     </View>
-    <Text style={styles.detail}>{!connection || connection.connection_status !== 'connected' ? 'Google disconnected · saved activities' : lastSync ? `${stale ? 'Stale · ' : ''}Synced ${lastSync.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Waiting for the first Google sync'}</Text>
+    <Text style={styles.detail}>{!connection || connection.connection_status !== 'connected' ? 'Connect Google Calendar to see tasks and events' : lastRefresh ? `${stale ? 'Stale · ' : ''}Refreshed ${lastRefresh.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Waiting for Google activities'}</Text>
     {!!connection?.last_error && <Text accessibilityRole="alert" style={styles.detail}>{connection.last_error}</Text>}
+    {!!state?.source_errors.tasks && <Text accessibilityRole="alert" style={styles.detail}>{state.source_errors.tasks}</Text>}
+    {!!state?.source_errors.calendar && <Text accessibilityRole="alert" style={styles.detail}>{state.source_errors.calendar}</Text>}
     {!!error && <Text accessibilityRole="alert" style={styles.detail}>{error}</Text>}
     {loading ? <Text style={styles.detail}>Loading organizer…</Text> : state && <>
       <Text style={styles.section}>Tasks</Text>
-      {taskRows.length ? taskRows.map(t => row('task', t, t.due_date ? `Due ${t.due_date}${t.due_time ? ` at ${t.due_time.slice(0,5)}` : ''}` : 'No deadline')) : <Text style={styles.detail}>No {completed ? 'completed' : 'unfinished'} tasks.</Text>}
+      {state.source_status.tasks !== 'ok' ? <Text style={styles.detail}>{state.source_status.tasks === 'not_connected' ? 'Connect Google Calendar to load tasks.' : 'Tasks are unavailable. Try refreshing.'}</Text> : taskRows.length ? taskRows.map(t => row('task', t, t.due_date ? `Due ${t.due_date}` : 'No deadline')) : <Text style={styles.detail}>No {completed ? 'completed' : 'unfinished'} tasks.</Text>}
       <Text style={styles.section}>Events</Text>
-      {eventRows.length ? eventRows.map(e => row('schedule', e, formatEvent(e, state.timezone))) : <Text style={styles.detail}>No {completed ? 'completed' : 'unfinished'} events.</Text>}
+      {state.source_status.calendar !== 'ok' ? <Text style={styles.detail}>{state.source_status.calendar === 'not_connected' ? 'Connect Google Calendar to load events.' : 'Calendar is unavailable. Try refreshing.'}</Text> : eventRows.length ? eventRows.map(e => row('schedule', e, formatEvent(e, state.timezone))) : <Text style={styles.detail}>No {completed ? 'completed' : 'unfinished'} events.</Text>}
     </>}
   </View>;
 }

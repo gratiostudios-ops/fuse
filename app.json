@@ -14,14 +14,16 @@
       "expo-splash-screen",
       "expo-web-browser",
       "expo-secure-store",
-      "expo-background-task"
+      "expo-background-task",
+      "./plugins/with-supabase-android-trust"
     ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.fuse.app"
     },
     "android": {
-      "package": "com.fuse.app"
+      "package": "com.fuse.app",
+      "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
       "bundler": "metro",

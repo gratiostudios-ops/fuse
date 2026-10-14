@@ -277,3 +277,19 @@ test('connection lookup failure preserves suggestions and hides the earlier priv
   assert.equal(state.cache?.snapshot.connectionId, null);
   assert.equal(await runner.latest(), null);
 });
+
+
+test('a transient AI failure retains the last valid output without refreshing its age', async () => {
+  const { state, deps } = fixture('owner');
+  const response = { schema_version: 1 as const, response_id: 'valid', message: 'A useful next step', blocks: [] };
+  deps.process = async () => ({ status: 'completed', response });
+  const runner = createRefreshCoordinator(deps);
+  await runner.run();
+  const previous = state.cache;
+  state.time += REFRESH_INTERVAL_MS + 1;
+  deps.process = async () => { throw new Error('Temporary outage'); };
+  const result = await runner.run();
+  assert.equal(result.status, 'partial');
+  assert.equal(state.cache, previous);
+  assert.equal((await runner.latest())?.processing.status, 'completed');
+});

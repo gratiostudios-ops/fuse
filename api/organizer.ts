@@ -1,6 +1,6 @@
 import { getSupabaseClient } from './supabase';
+import { throwIfAborted } from './abort';
 import { FunctionsHttpError } from '@supabase/supabase-js';
-import { signInWithGoogle } from './auth/google';
 import type { Task, Schedule } from './types';
 
 export type OrganizerConnection = {
@@ -17,14 +17,14 @@ export const notifyOrganizerChanged = (reason = 'sync') => { for (const listener
 export const subscribeOrganizer = (listener: (reason: string) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 export const deviceTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 export async function organizerAction<T>(body: object, signal?: AbortSignal): Promise<T> {
-  signal?.throwIfAborted();
+  throwIfAborted(signal);
   const client = getSupabaseClient();
   const { data: { session }, error: authError } = await client.auth.getSession();
   if (authError) throw authError;
   if (!session) throw new Error('Sign in to use your organizer.');
-  signal?.throwIfAborted();
+  throwIfAborted(signal);
   const { data, error } = await client.functions.invoke('organizer', { body, signal, headers: { Authorization: `Bearer ${session.access_token}` } });
-  signal?.throwIfAborted();
+  throwIfAborted(signal);
   if (error instanceof FunctionsHttpError) {
     const detail = await error.context.json().catch(() => null);
     throw new Error(typeof detail?.error === 'string' ? detail.error : 'Organizer is unavailable. Check backend setup.');
@@ -81,9 +81,14 @@ export async function setOrganizerCompletion(kind: 'task' | 'schedule', item: Ta
 }
 export async function requestDailyRecap(signal?: AbortSignal) {
   const result = await organizerAction<{ recap: DailyRecap | null; message?: string }>({ action: 'recap' }, signal);
-  signal?.throwIfAborted();
+  throwIfAborted(signal);
   notifyOrganizerChanged(); return result;
 }
-export async function connectOrganizer() { return signInWithGoogle(); }
+export async function connectOrganizer() {
+  // Keep the Google OAuth module out of the static import graph: it calls
+  // registerGoogleCredentials below after completing the auth exchange.
+  const { signInWithGoogle } = await import('./auth/google');
+  return signInWithGoogle();
+}
 export async function disconnectOrganizer() { await organizerAction({ action: 'disconnect' }); clearOrganizerCache(); notifyOrganizerChanged('disconnect'); }
 export async function saveOrganizerTimezone(timezone: string) { await organizerAction({ action: 'timezone', timezone }); notifyOrganizerChanged('timezone'); }

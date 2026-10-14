@@ -38,7 +38,7 @@ All client-facing responses use this **one JSON envelope**, irrespective of whic
 
 - `schema_version` is always the integer `1` for this contract.
 - `message` is a concise string. Do not repeat all card details in it.
-- `blocks` is an array; it may be empty or contain any mix of `task`, `schedule`, `suggestion`, and `text` blocks.
+- `blocks` is an array of at most five cards. Never mix suggestions with tasks or schedules in the same answer.
 - Return **one envelope per assistant turn**, not separate JSON objects for each item. A response with one task and one schedule has exactly two entries in the same `blocks` array. A response with three tasks has three `task` entries. Preserve a useful presentation order (normally chronological).
 - Every block is an object with `type` and `data`. Only return supported types.
 - The frontend chooses card colors and layout based on `type`: task (red), schedule (blue), suggestion (green), text (plain). Do not generate HTML/CSS.
@@ -184,7 +184,7 @@ URLs and IDs in examples are placeholders, not verified recommendations.
 
 **User:** "Suggest coding videos."
 
-**Backend:** Retrieves actual assigned videos from `user_suggestions` joined with `suggestions`.
+**Backend:** Retrieves active catalog videos matching the user's saved topics; new suggestions need not already exist in `user_suggestions`.
 
 ```json
 {
@@ -251,3 +251,9 @@ function FuseResponse({ response }) {
 ```
 
 This assumes the backend has already validated the full response against your schema. The frontend should also use a runtime schema validator at its API boundary.
+CURRENT PRESENTATION RULES (override older examples):
+Return at most five cards, either suggestions or tasks/schedules, never both groups. Use recent displayed outputs to vary concise wording. Do not show errors or no-task/no-records messages; use an empty message and no cards when there is no verified answer. Never claim an unconfirmed write succeeded. Necessary clarification questions remain supported.
+
+Selection adapter: classify answer_kind as answer (verified answer or clarification), empty (no matching records), or unavailable (cannot fulfill). Empty/unavailable outcomes must not include visible error or not-found text.
+
+When a suggestion request has no saved topics (and the topic read succeeded), ask the user to choose interests in the account panel. Treat this as answer_kind=answer clarification, never a blank unavailable outcome. Google Tasks or Calendar failures do not prevent using verified suggestion candidates.

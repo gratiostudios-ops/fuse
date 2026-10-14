@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GoogleLogoIcon } from 'phosphor-react-native';
 import { signInWithGoogle, signOut } from '../api/auth';
+import { claimGoogleSignInNavigation } from '../api/auth/google';
 import { useAuth } from '../src/auth-context';
 import { connectOrganizer, retryGoogleRegistration, saveOrganizerTimezone } from '../api/organizer';
 import { useOrganizer } from '../src/organizer';
@@ -30,7 +31,7 @@ export default function SignInScreen() {
     try {
       const result = await signInWithGoogle();
       if (result.status === 'cancelled') setMessage('Sign-in cancelled. You can try again.');
-      if (result.status === 'signed-in') router.replace('/');
+      if (result.status === 'signed-in' && claimGoogleSignInNavigation()) router.replace('/');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not connect your Google account.');
     } finally {
@@ -65,8 +66,7 @@ export default function SignInScreen() {
           </Pressable>
         )}
         {session && <>
-          <Text style={styles.description}>{organizer.loading ? 'Checking Google connection…' : !organizer.state ? 'Google connection status could not be loaded.' : organizer.state.connection?.connection_status === 'connected' ? `Calendar connected: ${organizer.state.connection.google_acc}` : organizer.state.connection?.connection_status === 'reconnect_required' ? 'Calendar connection incomplete. Reconnect Google Calendar.' : 'Google Calendar and Tasks are not connected.'}</Text>
-          {!!organizer.state?.connection?.last_error && <Text accessibilityRole="alert" style={styles.message}>{organizer.state.connection.last_error}</Text>}
+          <Text style={styles.description}>{organizer.loading ? 'Checking Google connection…' : !organizer.state ? '' : organizer.state.connection?.connection_status === 'connected' ? `Calendar connected: ${organizer.state.connection.google_acc}` : organizer.state.connection?.connection_status === 'reconnect_required' ? 'Connect Google Calendar and Tasks.' : 'Google Calendar and Tasks are not connected.'}</Text>
           <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void integration(async () => { const result = await connectOrganizer(); if (result.status === 'cancelled') setMessage('Connection cancelled. You can try again.'); }); }} style={styles.back}>
             <Text style={styles.backText}>Connect Google Calendar</Text>
           </Pressable>
@@ -76,9 +76,7 @@ export default function SignInScreen() {
           <Text style={styles.description}>Daily recap time zone (9 PM)</Text>
           <TextInput accessibilityLabel="Daily recap time zone" style={styles.timezone} value={timezone} onChangeText={setTimezone} autoCapitalize="none" placeholder="Asia/Kolkata" placeholderTextColor={colors.placeholder} />
           <Pressable accessibilityRole="button" disabled={busy || !timezone.trim()} onPress={() => { void integration(() => saveOrganizerTimezone(timezone.trim())); }} style={styles.back}><Text style={styles.backText}>Save time zone</Text></Pressable>
-          {!!organizer.error && <Text accessibilityRole="alert" style={styles.message}>{organizer.error}</Text>}
         </>}
-        {(message || initializationError) && <Text accessibilityRole="alert" style={styles.message}>{message ?? initializationError}</Text>}
       </View>
     </ScrollView>
   );

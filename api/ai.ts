@@ -1,4 +1,7 @@
+import { getDisplayHistory } from './display-history';
+import { receiveSuggestions } from './user-suggestions';
 import { FunctionsHttpError } from '@supabase/supabase-js';
+import { throwIfAborted } from './abort';
 import { getSupabaseClient } from './supabase';
 import { parseFuseResponse, type FuseResponse } from '../supabase/functions/_shared/contract';
 import { clearOrganizerCache, notifyOrganizerChanged } from './organizer';
@@ -18,19 +21,19 @@ export function decideHome(previous: { type: string; id: string }[] = []): Promi
 }
 
 async function invokeAI(body: object, signal?: AbortSignal): Promise<FuseResponse> {
-  signal?.throwIfAborted();
+  throwIfAborted(signal);
   const client = getSupabaseClient();
   const { data: { session }, error: sessionError } = await client.auth.getSession();
   if (sessionError) throw sessionError;
   if (!session) throw new Error('Please sign in using the account menu before asking Fuse AI.');
 
-  signal?.throwIfAborted();
+  throwIfAborted(signal);
   const functionName = process.env.EXPO_PUBLIC_AI_FUNCTION_NAME?.trim() || 'fuse-ai';
   const { data, error } = await client.functions.invoke(functionName, {
-    body, signal,
+    body: { ...body, display_history: await getDisplayHistory(session.user.id).then(({ outputs, schedules }) => ({ outputs, schedules })) }, signal,
     headers: { Authorization: `Bearer ${session.access_token}` },
   });
-  signal?.throwIfAborted();
+  throwIfAborted(signal);
   if (error instanceof FunctionsHttpError) {
     let detail: unknown;
     try { detail = await error.context.json(); } catch { /* Response may not be JSON. */ }
@@ -42,11 +45,15 @@ async function invokeAI(body: object, signal?: AbortSignal): Promise<FuseRespons
   const response = parseFuseResponse(data);
   if (body && 'mode' in body && body.mode === 'chat' && data?.activity_changed === true) {
     const { data: { session: current } } = await client.auth.getSession();
-    signal?.throwIfAborted();
+    throwIfAborted(signal);
     if (current?.user.id === session.user.id) {
       clearOrganizerCache();
       notifyOrganizerChanged('creation');
     }
   }
+  const { data: { session: recipient } } = await client.auth.getSession();
+  throwIfAborted(signal);
+  if (recipient?.user.id !== session.user.id) throw new Error('Account changed');
+  void receiveSuggestions(session.user.id, response);
   return response;
 }

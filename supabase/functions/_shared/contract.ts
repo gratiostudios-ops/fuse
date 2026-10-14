@@ -1,9 +1,9 @@
 export type Block =
   | { type: 'task'; data: { id: string; title: string; due_date: string | null; due_time: string | null; is_completed: boolean } }
   | { type: 'schedule'; data: { id: string; title: string; start: string; end: string; is_completed?: boolean; is_all_day?: boolean; start_date?: string | null; end_date?: string | null } }
-  | { type: 'suggestion'; data: { id: string; title: string; video_url: string; thumbnail_url: string | null; duration_minutes: number | null } }
+  | { type: 'suggestion'; data: { id: string; title: string; description?: string | null; video_url: string; thumbnail_url: string | null; duration_minutes: number | null } }
   | { type: 'text'; data: { content: string } };
-export type FuseResponse = { schema_version: 1; message: string; blocks: Block[] };
+export type FuseResponse = { schema_version: 1; response_id?: string; message: string; blocks: Block[] };
 export type Candidate = { type: 'task' | 'schedule' | 'suggestion'; id: string; block: Block; priority: number };
 export type Selection = { type: Candidate['type']; id: string; reason: string };
 
@@ -19,6 +19,7 @@ const safeUrl = (x: unknown) => {
 export function parseFuseResponse(value: unknown): FuseResponse {
   if (!object(value) || value.schema_version !== 1 || typeof value.message !== 'string'
     || value.message.length > 4000 || !Array.isArray(value.blocks) || value.blocks.length > 50) throw new Error('Invalid AI response.');
+  if (value.response_id !== undefined && (typeof value.response_id !== 'string' || value.response_id.length > 128)) throw new Error('Invalid response ID.');
   for (const block of value.blocks) {
     if (!object(block) || !object(block.data)) throw new Error('Invalid AI block.');
     const d = block.data;
@@ -36,34 +37,17 @@ export function parseFuseResponse(value: unknown): FuseResponse {
         || (d.is_all_day !== undefined && typeof d.is_all_day !== 'boolean')
         || (d.is_all_day === true && (!isoDate(d.start_date) || !isoDate(d.end_date)))) throw new Error('Invalid schedule block.');
     } else if (block.type === 'suggestion') {
-      if (!safeUrl(d.video_url) || !(d.thumbnail_url === null || safeUrl(d.thumbnail_url))
+      if (!(d.description === undefined || d.description === null || typeof d.description === 'string') || !safeUrl(d.video_url) || !(d.thumbnail_url === null || safeUrl(d.thumbnail_url))
         || !(d.duration_minutes === null || typeof d.duration_minutes === 'number' && Number.isFinite(d.duration_minutes) && d.duration_minutes >= 0)) throw new Error('Invalid suggestion block.');
     } else throw new Error('Unsupported AI block type.');
   }
   return value as FuseResponse;
 }
 
-/** Home copy describes selected cards, never source completeness or free time. */
-export function homeSummary(blocks: readonly Block[]): string {
-  const types = new Set(blocks.map(block => block.type));
-  const activity = types.has('task') || types.has('schedule');
-  if (activity && types.has('suggestion')) return 'Here’s what’s coming up.';
-  if (types.has('task') && types.has('schedule')) return 'Here’s your upcoming plan.';
-  if (types.has('schedule')) return 'Here are your upcoming events.';
-  if (types.has('task')) return 'Here are your tasks.';
-  if (types.has('suggestion')) return 'Here are some suggestions for you.';
-  return 'Your plan will appear here when items are available.';
-}
-
-/** Remove only the retired generic prefix, preserving useful action/source errors. */
-export function stripLegacyLoadWarning(message: string): string {
-  return message.replace(/^\s*Some data could not be loaded \([^)]*\)\.\s*/i, '');
-}
-
 /** Model selects IDs; all displayed fields come from server-fetched rows. */
 export function buildResponse(value: unknown, candidates: Candidate[], home: boolean): FuseResponse {
   if (!object(value) || typeof value.message !== 'string' || !Array.isArray(value.selections)
-    || value.selections.length > (home ? 4 : 50)) throw new Error('Invalid AI selection.');
+    || value.selections.length > (home ? 2 : 5)) throw new Error('Invalid AI selection.');
   const seen = new Set<string>();
   const blocks: Block[] = [];
   for (const selection of value.selections) {
@@ -74,5 +58,6 @@ export function buildResponse(value: unknown, candidates: Candidate[], home: boo
     seen.add(key);
     blocks.push(candidate.block);
   }
-  return parseFuseResponse({ schema_version: 1, message: home ? homeSummary(blocks) : stripLegacyLoadWarning(value.message), blocks });
+  if (blocks.some(b => b.type === 'suggestion') && blocks.some(b => b.type === 'task' || b.type === 'schedule')) throw new Error('Mixed answer groups.');
+  return parseFuseResponse({ schema_version: 1, message: (home && !blocks.length && value.answer_kind !== 'answer') || value.answer_kind === 'empty' || value.answer_kind === 'unavailable' ? '' : value.message, blocks });
 }

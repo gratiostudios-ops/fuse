@@ -43,8 +43,18 @@ export function useOrganizer(userId: string | null) {
     const timer = setInterval(() => { void resume(); }, 30 * 60 * 1000);
     const subscription = AppState.addEventListener('change', next => { if (next === 'active') void resume(); });
     const focus = () => { void resume(); };
-    if (typeof window !== 'undefined') window.addEventListener('focus', focus);
-    return () => { alive = false; unsubscribe(); clearInterval(timer); subscription.remove(); if (typeof window !== 'undefined') window.removeEventListener('focus', focus); };
+    const canListenForWindowFocus = typeof window !== 'undefined'
+      && typeof window.addEventListener === 'function';
+    if (canListenForWindowFocus) window.addEventListener('focus', focus);
+    return () => {
+      alive = false;
+      unsubscribe();
+      clearInterval(timer);
+      subscription.remove();
+      if (canListenForWindowFocus && typeof window.removeEventListener === 'function') {
+        window.removeEventListener('focus', focus);
+      }
+    };
   }, [userId, reload]);
   async function refresh() {
     if (busy || !userId) return;
@@ -104,20 +114,17 @@ export function OrganizerList({ controller, expanded }: { controller: OrganizerC
       <Pressable accessibilityRole="button" accessibilityLabel="Refresh organizer" disabled={!!busy} onPress={() => { void refresh(); }} style={styles.action}><ArrowClockwiseIcon size={18} color={colors.inactive} /></Pressable>
     </View>
     <Text style={styles.detail}>{!connection || connection.connection_status !== 'connected' ? 'Connect Google Calendar to see tasks and events' : lastRefresh ? `${stale ? 'Stale · ' : ''}Refreshed ${lastRefresh.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Waiting for Google activities'}</Text>
-    {!!connection?.last_error && <Text accessibilityRole="alert" style={styles.detail}>{connection.last_error}</Text>}
-    {!!state?.source_errors.tasks && <Text accessibilityRole="alert" style={styles.detail}>{state.source_errors.tasks}</Text>}
-    {!!state?.source_errors.calendar && <Text accessibilityRole="alert" style={styles.detail}>{state.source_errors.calendar}</Text>}
-    {!!error && <Text accessibilityRole="alert" style={styles.detail}>{error}</Text>}
     {loading ? <Text style={styles.detail}>Loading organizer…</Text> : state && <>
       <Text style={styles.section}>Tasks</Text>
-      {state.source_status.tasks !== 'ok' ? <Text style={styles.detail}>{state.source_status.tasks === 'not_connected' ? 'Connect Google Calendar to load tasks.' : 'Tasks are unavailable. Try refreshing.'}</Text> : taskRows.length ? taskRows.map(t => row('task', t)) : <Text style={styles.detail}>No {completed ? 'completed' : 'unfinished'} tasks.</Text>}
+      {state.source_status.tasks === 'ok' && taskRows.map(t => row('task', t))}
       <Text style={styles.section}>Events</Text>
-      {state.source_status.calendar !== 'ok' ? <Text style={styles.detail}>{state.source_status.calendar === 'not_connected' ? 'Connect Google Calendar to load events.' : 'Calendar is unavailable. Try refreshing.'}</Text> : eventRows.length ? eventRows.map(e => row('schedule', e)) : <Text style={styles.detail}>No {completed ? 'completed' : 'unfinished'} events.</Text>}
+      {state.source_status.calendar === 'ok' && eventRows.map(e => row('schedule', e))}
     </>}
   </View>;
 }
 export function DailyRecapView({ controller }: { controller: OrganizerController }) {
-  const recap = controller.state?.recap;
+  const saved = controller.state?.recap;
+  const recap = saved && Object.values(saved.source_status).every(status => status === 'ok') ? saved : null;
   return <View style={styles.recap}>
     <View style={styles.toolbar}><Text style={styles.section}>Daily recap{recap ? ` · ${recap.local_date}` : ''}</Text>
       <Pressable accessibilityRole="button" disabled={!!controller.busy} onPress={() => { void controller.recap(); }} style={styles.action}>
@@ -128,7 +135,6 @@ export function DailyRecapView({ controller }: { controller: OrganizerController
       <Text style={styles.active}>Tomorrow’s plan</Text><Text style={styles.body}>{recap.tomorrow_plan}</Text>
       <Text style={styles.detail}>As of {new Date(recap.generated_at).toLocaleString(undefined, { timeZone: recap.timezone })} · {recap.timezone}</Text></>
       : <Text style={styles.detail}>Your short recap appears here after 9 PM, with a plan for tomorrow.</Text>}
-    {!!controller.error && <Text accessibilityRole="alert" style={styles.detail}>{controller.error}</Text>}
   </View>;
 }
 const styles = StyleSheet.create({

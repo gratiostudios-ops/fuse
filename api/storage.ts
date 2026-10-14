@@ -12,4 +12,3 @@ export const authStorage = {
 };
 
 export const canPersistSession = typeof window !== 'undefined';
-export const sessionLock = undefined;

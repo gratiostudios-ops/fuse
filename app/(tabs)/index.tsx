@@ -1,5 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardVisibilityContext } from '../../src/keyboard-layout';
+import { AppState } from 'react-native';
+import { useIsFocused } from 'expo-router';
+import { recordDisplayed } from '../../api/display-history';
+import { useContext, useEffect, useRef, useState } from 'react';
+import { Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ArrowCircleRightIcon, ArrowClockwiseIcon, CaretDownIcon, ChecksIcon, NotebookIcon, StopCircleIcon } from 'phosphor-react-native';
 import { requestDailyRecap, subscribeOrganizer, type DailyRecap } from '../../api/organizer';
 import { colors, fonts } from '../../src/theme';
@@ -15,6 +19,7 @@ import { parseFuseResponse } from '../../supabase/functions/_shared/contract';
 const ORGANIZER_ENABLED = false;
 
 export default function HomeScreen() {
+  const keyboardVisible = useContext(KeyboardVisibilityContext);
   const inputRef = useRef<TextInput>(null);
   const generation = useRef(0);
   const requestSequence = useRef(0);
@@ -39,6 +44,7 @@ export default function HomeScreen() {
   const [home, setHome] = useState<FuseResponse | null>(null);
   const [homeError, setHomeError] = useState('');
   const [homeLoading, setHomeLoading] = useState(false);
+  useEffect(() => { if (homeError || recapError) console.warn('Home request unavailable', homeError || recapError); }, [homeError, recapError]);
 
   useEffect(() => {
     let alive = true;
@@ -59,7 +65,7 @@ export default function HomeScreen() {
       const record = await getLatestRefresh();
       if (!alive || identity.current !== userId || generation.current !== updateGeneration) return;
       const response = record?.processing.status === 'completed' ? record.processing.response : undefined;
-      setHome(response ? parseFuseResponse(response) : null);
+      if (response) setHome(parseFuseResponse(response));
       setHomeError(record?.processing.status === 'error' ? record.processing.error : '');
     };
     const unsubscribe = subscribeRefresh(() => { void update().catch(() => {}); });
@@ -67,7 +73,10 @@ export default function HomeScreen() {
     void initializeRefreshRuntime().run().then(async result => {
       if (generation.current !== initialGeneration) return;
       await update();
-      if (alive && generation.current === initialGeneration && result.status === 'failed') setHomeError(result.reason ?? 'Could not refresh Home.');
+      if (alive && generation.current === initialGeneration) {
+        if (result.record?.processing.status === 'error') setHomeError(result.record.processing.error);
+        else if (result.status === 'failed') setHomeError(result.reason ?? 'Could not refresh Home.');
+      }
     }).catch(err => { if (alive && generation.current === initialGeneration) setHomeError(err instanceof Error ? err.message : 'Could not refresh Home.'); })
       .finally(() => { if (alive && generation.current === initialGeneration) setHomeLoading(false); });
     return () => { alive = false; generation.current++; cancelRequest(); unsubscribe(); };
@@ -88,7 +97,10 @@ export default function HomeScreen() {
     setHomeError('');
     try {
       const result = await refreshNow();
-      if (identity.current === owner && generation.current === requestGeneration && result.status === 'failed') setHomeError(result.reason ?? 'Could not refresh Home.');
+      if (identity.current === owner && generation.current === requestGeneration) {
+        if (result.record?.processing.status === 'error') setHomeError(result.record.processing.error);
+        else if (result.status === 'failed') setHomeError(result.reason ?? 'Could not refresh Home.');
+      }
     } catch (err) {
       if (identity.current === owner && generation.current === requestGeneration) setHomeError(err instanceof Error ? err.message : 'Could not refresh Home.');
     } finally { if (identity.current === owner && generation.current === requestGeneration) setHomeLoading(false); }
@@ -96,6 +108,7 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const sending = useRef(false);
+  useEffect(() => { if (error) console.warn('Chat request unavailable', error); }, [error]);
 
   useEffect(() => {
     setDoneVisible(false);
@@ -122,6 +135,7 @@ export default function HomeScreen() {
     const requestGeneration = generation.current;
     sending.current = true;
     setLoading(true);
+    inputRef.current?.clear();
     setMode('chat'); setPreview(input); setDelivered(false); setMessage(''); setInputHeight(17);
     setError('');
     try {
@@ -156,19 +170,28 @@ export default function HomeScreen() {
     const requestGeneration = generation.current;
     try {
       const result = await requestDailyRecap(controller.signal);
-      if (identity.current === owner && generation.current === requestGeneration && sequence === requestSequence.current) { setRecap(result.recap); if (!result.recap) setRecapError(result.message || 'Recap is being prepared. Try again shortly.'); }
+      if (identity.current === owner && generation.current === requestGeneration && sequence === requestSequence.current) { setRecap(result.recap && Object.values(result.recap.source_status).every(status => status === 'ok') ? result.recap : null); if (!result.recap) setRecapError(result.message || 'Recap is being prepared. Try again shortly.'); }
     } catch (reason) { if (identity.current === owner && generation.current === requestGeneration && sequence === requestSequence.current) setRecapError(reason instanceof Error ? reason.message : 'Could not generate recap.'); }
     finally { if (identity.current === owner && generation.current === requestGeneration && sequence === requestSequence.current) setRecapLoading(false); }
   }
   const latestReply = [...messages].reverse().find(item => item.role === 'assistant')?.response;
-  const showStop = loading || recapLoading || (mode !== 'home' && !message.trim());
+  const focused = useIsFocused();
+  const visibleResponse = mode === 'home' ? home : mode === 'chat' && !loading ? latestReply : null;
+  useEffect(() => {
+    const record = () => { if (focused && userId && visibleResponse && AppState.currentState === 'active') void recordDisplayed(userId, visibleResponse).catch(() => {}); };
+    record();
+    const subscription = AppState.addEventListener('change', record);
+    return () => subscription.remove();
+  }, [focused, userId, visibleResponse]);
+  const showStop = loading || recapLoading;
+  const hasHomeOutput = !!home && (!!home.message.trim() || home.blocks.length > 0);
   const hasActivities = home?.blocks.some(block => block.type === 'task' || block.type === 'schedule');
   const activitiesToday = home?.blocks.filter(block => block.type === 'task' || block.type === 'schedule').every(block => {
     const today = new Date().toLocaleDateString('en-CA');
     return block.type === 'task' ? block.data.due_date === today : block.type === 'schedule' && (block.data.is_all_day ? block.data.start_date === today : new Date(block.data.start).toLocaleDateString('en-CA') === today);
   });
   return (
-    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <View style={styles.screen}>
       {ORGANIZER_ENABLED && <NavigationGestureBoundary><Pressable accessibilityRole="button" accessibilityLabel="Organizer" accessibilityState={{ expanded: organizerExpanded }} onPress={() => setOrganizerExpanded(value => !value)} style={styles.organizer}>
         <Text style={styles.organizerLabel}>Organizer</Text>
         <CaretDownIcon size={17} color={colors.foreground} style={[styles.caret, organizerExpanded && { transform: [{ rotate: '180deg' }] }]} />
@@ -178,30 +201,30 @@ export default function HomeScreen() {
           <Pressable accessibilityRole="button" accessibilityLabel="Daily recap" disabled={loading || recapLoading} onPress={() => { void openRecap(); }} style={styles.iconButton}><NotebookIcon weight="bold" size={19} color="#606060" /></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Refresh Home" accessibilityState={{ busy: homeLoading }} disabled={homeLoading} onPress={reloadHome} style={styles.iconButton}><ArrowClockwiseIcon weight="bold" size={19} color={homeLoading ? '#606060' : '#929292'} /></Pressable>
         </NavigationGestureBoundary>}
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.centered} keyboardShouldPersistTaps="handled">
-          {mode === 'home' ? <View style={styles.main}>
+        <ScrollView style={styles.scroll} contentContainerStyle={[styles.centered, mode === 'home' && styles.homeCentered]} keyboardShouldPersistTaps="handled">
+          {mode === 'home' ? <View style={[styles.main, styles.homeMain]}>
             {ORGANIZER_ENABLED && organizerExpanded ? <OrganizerList controller={organizer} expanded /> : <>
-              {!!userId && home && <><Text style={styles.heading}>{hasActivities ? activitiesToday ? 'Today’s Plan' : 'Your Plan' : 'For you'}</Text><FuseResponseView response={home} presentation="home" /></>}
-              {!userId && <Text style={styles.messageText}>Sign in from the account menu to see your tasks and events.</Text>}
-              {homeLoading && <Text style={styles.messageText}>Updating Home…</Text>}
-              {!!homeError && <Text accessibilityRole="alert" style={styles.messageText}>{homeError}</Text>}
+              {!!userId && home && <><Text style={[styles.heading, styles.homeHeading]}>{hasActivities ? activitiesToday ? 'Today’s Plan' : 'Your Plan' : 'For you'}</Text><FuseResponseView response={home} presentation="home" /></>}
+              {!userId && <Text style={styles.homeBodyText}>Sign in from the account menu to see your tasks and events.</Text>}
+              {homeLoading && <Text style={styles.homeBodyText}>Updating Home…</Text>}
+              {!homeLoading && !hasHomeOutput && !!homeError && <Text accessibilityRole="alert" numberOfLines={4} style={styles.requestError}>{homeError}</Text>}
             </>}
           </View> : <View style={styles.main}>
             {mode === 'chat' ? <>
               {latestReply && !loading && !error && <FuseResponseView response={latestReply} />}
               {loading && <Text style={styles.messageText}>Thinking…</Text>}
-              {!!error && <Text accessibilityRole="alert" style={styles.messageText}>{error}</Text>}
+              {!loading && !!error && <Text accessibilityRole="alert" numberOfLines={4} style={styles.requestError}>{error}</Text>}
             </> : <>
               <Text style={styles.heading}>Daily recap{recap ? ' · ' + recap.local_date : ''}</Text>
               {recapLoading && <Text style={styles.messageText}>Preparing your recap…</Text>}
+              {!recapLoading && !recap && !!recapError && <Text accessibilityRole="alert" numberOfLines={4} style={styles.requestError}>{recapError}</Text>}
               {recap && <><Text style={styles.subheading}>Completed today</Text><Text style={styles.messageText}>{recap.completed_today}</Text><Text style={styles.subheading}>Tomorrow’s plan</Text><Text style={styles.messageText}>{recap.tomorrow_plan}</Text><Text style={styles.recapDate}>As of {new Date(recap.generated_at).toLocaleString(undefined, { timeZone: recap.timezone })} · {recap.timezone}</Text></>}
-              {!!recapError && <Text accessibilityRole="alert" style={styles.messageText}>{recapError}</Text>}
             </>}
-            {mode === 'chat' && doneVisible && <NavigationGestureBoundary><Pressable accessibilityRole="button" accessibilityLabel="Done" onPress={clearResult} style={styles.pill}><Text style={styles.pillText}>Done</Text></Pressable></NavigationGestureBoundary>}
+            {((mode === 'chat' && doneVisible) || (mode === 'recap' && !recapLoading)) && <NavigationGestureBoundary><Pressable accessibilityRole="button" accessibilityLabel="Done" onPress={clearResult} style={styles.pill}><Text style={styles.pillText}>Done</Text></Pressable></NavigationGestureBoundary>}
           </View>}
         </ScrollView>
       </View>
-      <NavigationGestureBoundary style={styles.composer} accessibilityLabel="Chat composer">
+      <NavigationGestureBoundary style={[styles.composer, keyboardVisible && { marginBottom: 10 }]} accessibilityLabel="Chat composer">
         {!!preview && <View style={styles.preview}><Text numberOfLines={4} ellipsizeMode="tail" style={styles.previewText}>{preview}</Text>{delivered && <View accessible accessibilityLabel="Message delivered" style={styles.delivery}><ChecksIcon size={20} color="#168BFF" /></View>}</View>}
         <View style={styles.input}>
           <TextInput ref={inputRef} style={[styles.placeholder, { height: Math.min(preview ? 68 : 136, Math.max(17, inputHeight)), maxHeight: preview ? 68 : 136 }]} placeholder="Ask anything" placeholderTextColor={colors.placeholder}
@@ -213,7 +236,7 @@ export default function HomeScreen() {
           </Pressable>
         </View>
       </NavigationGestureBoundary>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -227,17 +250,22 @@ const styles = StyleSheet.create({
   iconButton: { width: 36, height: 44, alignItems: 'center', justifyContent: 'center' },
   scroll: { flex: 1 },
   centered: { flexGrow: 1, justifyContent: 'center', paddingVertical: 20 },
+  homeCentered: { paddingVertical: 10 },
   main: { paddingLeft: 24, paddingRight: 29, gap: 16 },
-  heading: { fontFamily: fonts.heading, fontSize: 28, lineHeight: 31, color: '#FFFFFF', marginBottom: 23, marginLeft: 2 },
-  recapDate: { fontFamily: fonts.regular, fontSize: 12, lineHeight: 18, color: '#929292' },
-  subheading: { fontFamily: fonts.semibold, fontSize: 16, lineHeight: 19, color: '#E6E6E6' },
-  messageText: { fontFamily: fonts.semibold, fontSize: 16, lineHeight: 19, color: '#E6E6E6' },
+  homeMain: { gap: 8 },
+  heading: { fontFamily: fonts.heading, fontSize: 20, lineHeight: 22, color: '#FFFFFF', marginBottom: 23, marginLeft: 2 },
+  homeHeading: { marginBottom: 13, transform: [{ translateY: -5 }] },
+  recapDate: { fontFamily: fonts.regular, fontSize: 12, lineHeight: 16, color: '#929292' },
+  subheading: { fontFamily: fonts.semibold, fontSize: 16, lineHeight: 17, color: '#E6E6E6' },
+  homeBodyText: { fontFamily: fonts.semibold, fontSize: 14, lineHeight: 16, color: '#E6E6E6' },
+  requestError: { fontFamily: fonts.regular, fontSize: 12, lineHeight: 17, color: '#929292' },
+  messageText: { fontFamily: fonts.semibold, fontSize: 14, lineHeight: 18, color: '#E6E6E6' },
   pill: { width: 131, minHeight: 39, borderRadius: 224, backgroundColor: '#D9D9D9', alignItems: 'center', justifyContent: 'center', marginTop: 2 },
   pillText: { fontFamily: fonts.heading, fontSize: 18, lineHeight: 20, color: '#000000' },
   disabled: { opacity: 0.45 },
   composer: { flexShrink: 0, marginLeft: 16, marginRight: 17, marginBottom: 7, paddingHorizontal: 8, paddingTop: 10, paddingBottom: 9, backgroundColor: '#121212', borderRadius: 33 },
   input: { minHeight: 52, borderRadius: 26, backgroundColor: 'rgba(255,255,255,0.0784314)', paddingLeft: 16, paddingRight: 48, paddingVertical: 17 },
-  placeholder: { fontFamily: fonts.semibold, fontSize: 14, lineHeight: 17, color: '#E6E6E6', includeFontPadding: false, padding: 0, borderWidth: 0, ...(Platform.OS === 'web' ? { outlineWidth: 0, outlineStyle: 'none', outlineColor: 'transparent' } : {}) },
+  placeholder: { fontFamily: fonts.semibold, fontSize: 14, lineHeight: 17, color: '#E6E6E6', includeFontPadding: false, padding: 0, borderWidth: 0, ...(Platform.OS === 'web' ? { outlineWidth: 0, outlineStyle: 'solid', outlineColor: 'transparent' } : {}) },
   send: { position: 'absolute', right: 0, bottom: 4, width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   preview: { paddingVertical: 13, paddingHorizontal: 15, paddingRight: 30, marginBottom: 3 },
   previewText: { fontFamily: fonts.semibold, fontSize: 14, lineHeight: 17, color: '#E6E6E6' },

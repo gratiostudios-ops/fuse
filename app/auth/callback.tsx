@@ -1,8 +1,22 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
-import { completeGoogleSignIn, getGoogleRedirectUri } from '../../api/auth/google';
+import { claimGoogleSignInNavigation, completeGoogleSignIn, getGoogleRedirectUri } from '../../api/auth/google';
 import { colors, fonts } from '../../src/theme';
+
+const ALLOWED_PARAMS = ['code', 'error', 'error_description'];
+
+// Builds the callback URL without using URL / URLSearchParams.set,
+// which can throw on some React Native setups.
+function buildCallbackHref(params: Record<string, unknown>): string {
+  const query = Object.entries(params)
+    .filter(([key, value]) => typeof value === 'string' && ALLOWED_PARAMS.includes(key))
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value as string)}`)
+    .join('&');
+  const base = getGoogleRedirectUri();
+  if (!query) return base;
+  return `${base}${base.includes('?') ? '&' : '?'}${query}`;
+}
 
 export default function AuthCallbackScreen() {
   const params = useLocalSearchParams<{ code?: string; error?: string; error_description?: string }>();
@@ -10,25 +24,32 @@ export default function AuthCallbackScreen() {
 
   useEffect(() => {
     let alive = true;
-    const url = new URL(getGoogleRedirectUri());
-    for (const [key, value] of Object.entries(params)) {
-      if (typeof value === 'string' && ['code', 'error', 'error_description'].includes(key)) url.searchParams.set(key, value);
-    }
-    void completeGoogleSignIn(url.href).then(() => {
-      if (alive) router.replace('/');
-    }).catch(reason => {
+
+    // Everything runs inside the async function, so synchronous throws
+    // (bad URL, undefined import, etc.) are caught by .catch below.
+    (async () => {
+      const href = buildCallbackHref(params);
+      await completeGoogleSignIn(href);
+      if (alive && claimGoogleSignInNavigation()) router.replace('/');
+    })().catch(reason => {
+      console.warn('Google sign-in callback failed', reason);
       if (alive) setError(reason instanceof Error ? reason.message : 'Could not complete Google sign-in.');
     });
+
     return () => { alive = false; };
   }, [params.code, params.error, params.error_description]);
 
   return (
     <View style={styles.screen}>
       {!error && <ActivityIndicator color={colors.foreground} />}
-      <Text accessibilityRole={error ? 'alert' : 'text'} style={styles.text}>{error ?? 'Connecting your Google account…'}</Text>
-      {error && <Pressable accessibilityRole="button" onPress={() => router.replace('/sign-in')} style={styles.button}>
-        <Text style={styles.text}>Back to sign-in</Text>
-      </Pressable>}
+      <Text accessibilityRole="text" style={styles.text}>
+        {error ? '' : 'Connecting your Google account…'}
+      </Text>
+      {error && (
+        <Pressable accessibilityRole="button" onPress={() => router.replace('/sign-in')} style={styles.button}>
+          <Text style={styles.text}>Back to sign-in</Text>
+        </Pressable>
+      )}
     </View>
   );
 }

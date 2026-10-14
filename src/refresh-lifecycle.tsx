@@ -1,3 +1,5 @@
+import { getSupabaseClient } from '../api/supabase';
+import { retrySuggestionReceipts } from '../api/user-suggestions';
 import { useEffect } from 'react';
 import { AppState, Platform } from 'react-native';
 import { registerBackgroundRefresh } from '../background/task';
@@ -8,7 +10,10 @@ export function RefreshLifecycle() {
   useEffect(() => {
     try {
       const runtime = initializeRefreshRuntime();
-      const run = () => { void runtime.run(); };
+      const run = () => {
+        void runtime.run();
+        void getSupabaseClient().auth.getSession().then(({ data }) => { if (data.session) void retrySuggestionReceipts(data.session.user.id); }).catch(() => {});
+      };
       run();
       void registerBackgroundRefresh().catch(error => {
         console.warn('Background refresh registration failed:', error instanceof Error ? error.message : 'unknown error');

@@ -1,32 +1,52 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildResponse, homeSummary, stripLegacyLoadWarning, type Candidate } from '../_shared/contract.ts';
+import { buildResponse, type Candidate } from '../_shared/contract.ts';
+import { homeCandidates } from '../_shared/home-selection.ts';
 
+const now = Date.parse('2026-10-15T07:00:00Z');
 const candidates: Candidate[] = [
-  { type: 'task', id: 'task', priority: 0, block: { type: 'task', data: { id: 'task', title: 'Finish draft', due_date: null, due_time: null, is_completed: false } } },
-  { type: 'schedule', id: 'event', priority: 0, block: { type: 'schedule', data: { id: 'event', title: 'Meeting', start: '2026-10-15T09:00:00Z', end: '2026-10-15T10:00:00Z' } } },
+  { type: 'task', id: 'task', priority: 90, block: { type: 'task', data: { id: 'task', title: 'Finish draft', due_date: null, due_time: null, is_completed: false } } },
+  { type: 'schedule', id: 'event', priority: 70, block: { type: 'schedule', data: { id: 'event', title: 'Meeting', start: '2026-10-15T09:00:00Z', end: '2026-10-15T10:00:00Z' } } },
+  { type: 'suggestion', id: 'video', priority: 10, block: { type: 'suggestion', data: { id: 'video', title: 'Learn', video_url: 'https://example.com/video', thumbnail_url: null, duration_minutes: 5 } } },
 ];
-
-test('Home keeps verified cards and order while discarding diagnostics and duplicate reasons', () => {
-  const result = buildResponse({ message: 'Some data could not be loaded (tasks). You are free.', selections: [
-    { type: 'schedule', id: 'event', reason: 'Meeting starts soon.' },
-    { type: 'task', id: 'task', reason: 'Finish draft is important.' },
-  ] }, candidates, true);
+const select = (c: Candidate) => ({ type: c.type, id: c.id, reason: 'Relevant' });
+test('preserves fresh model copy and trusted card order', () => {
+  const result = buildResponse({ message: 'A little preparation could help with your meeting.', selections: [select(candidates[1]), select(candidates[0])] }, candidates, true);
+  assert.equal(result.message, 'A little preparation could help with your meeting.');
   assert.deepEqual(result.blocks, [candidates[1].block, candidates[0].block]);
-  assert.equal(result.message, 'Here’s your upcoming plan.');
+});
+test('empty Home and classified errors do not show errors or not-found copy', () => {
+  assert.equal(buildResponse({ message: 'No tasks found', selections: [] }, [], true).message, '');
+  for (const answer_kind of ['empty', 'unavailable']) assert.equal(buildResponse({ answer_kind, message: 'Tasks unavailable', selections: [] }, [], false).message, '');
+});
+test('rejects mixed groups, duplicate and unknown IDs, and card overflow', () => {
+  assert.throws(() => buildResponse({ message: '', selections: [select(candidates[0]), select(candidates[2])] }, candidates, true), /Mixed/);
+  assert.throws(() => buildResponse({ message: '', selections: [select(candidates[0]), select(candidates[0])] }, candidates, true), /duplicate/);
+  assert.throws(() => buildResponse({ message: '', selections: [{ type: 'task', id: 'invented', reason: '' }] }, candidates, true), /unknown/);
+  assert.throws(() => buildResponse({ message: '', selections: candidates.map(select) }, candidates, true), /selection/);
+  assert.throws(() => buildResponse({ message: '', selections: Array(6).fill(select(candidates[0])) }, candidates, false), /selection/);
+  const five = Array.from({ length: 5 }, (_, i) => ({ ...candidates[0], id: String(i) }));
+  assert.equal(buildResponse({ message: 'Your tasks', selections: five.map(select) }, five, false).blocks.length, 5);
+});
+test('nearby boundary includes exactly two hours; otherwise suggestions beat overdue tasks', () => {
+  assert.deepEqual(homeCandidates(candidates, {}, now).map(c => c.type), ['schedule', 'task']);
+  assert.deepEqual(homeCandidates(candidates, {}, now - 1).map(c => c.type), ['suggestion']);
+  assert.deepEqual(homeCandidates(candidates, {}, now + 2.5 * 3600000).map(c => c.type), ['schedule', 'task']);
+  assert.deepEqual(homeCandidates(candidates, {}, now + 4 * 3600000).map(c => c.type), ['suggestion']);
+});
+test('twice-shown schedules yield to suggestions, changed timing resets eligibility', () => {
+  const history = { schedules: { event: { start: '2026-10-15T09:00:00Z', end: '2026-10-15T10:00:00Z', count: 2 } } };
+  assert.deepEqual(homeCandidates(candidates, history, now).map(c => c.type), ['suggestion']);
+  history.schedules.event.count = 1;
+  assert.equal(homeCandidates(candidates, history, now)[0].type, 'schedule');
+  history.schedules.event.count = 2; history.schedules.event.start = '2026-10-15T08:00:00Z';
+  assert.equal(homeCandidates(candidates, history, now)[0].type, 'schedule');
+  assert.deepEqual(homeCandidates([candidates[0]], {}, now), []);
 });
 
-test('empty Home does not claim no commitments or free time', () => {
-  assert.equal(buildResponse({ message: 'Nothing scheduled; you are free.', selections: [] }, [], true).message,
-    'Your plan will appear here when items are available.');
-  assert.equal(homeSummary([candidates[0].block]), 'Here are your tasks.');
-  assert.equal(homeSummary([candidates[1].block]), 'Here are your upcoming events.');
-});
 
-test('legacy prefix removal preserves meaningful failures and chat content', () => {
-  const failure = "I couldn't save this. Google Tasks access is unavailable.";
-  assert.equal(stripLegacyLoadWarning(failure), failure);
-  assert.equal(buildResponse({ message: `Some data could not be loaded (tasks). ${failure}`, selections: [] }, [], false).message, failure);
-  assert.equal(stripLegacyLoadWarning('Calendar is unavailable, so I cannot determine your schedule.'),
-    'Calendar is unavailable, so I cannot determine your schedule.');
+test('Home preserves verified setup guidance instead of returning a blank screen', () => {
+  const result = buildResponse({ answer_kind: 'answer', message: 'Choose a few interests in the account panel to personalize your feed.', selections: [] }, [], true);
+  assert.equal(result.message, 'Choose a few interests in the account panel to personalize your feed.');
+  assert.deepEqual(result.blocks, []);
 });

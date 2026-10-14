@@ -81,9 +81,9 @@ test('Calendar success and queries exclude the partial-read diagnostic from UI m
   assert.equal(saved.activity_changed, true);
   assert.equal(saved.message, 'Scheduled “Team meeting”.');
   assert.equal(saved.blocks[0].type, 'schedule');
-  await mock({ message: 'Your Tasks are unavailable.', selections: [], create: null }, false, true);
+  await mock({ answer_kind: 'unavailable', message: 'Your Tasks are unavailable.', selections: [], create: null }, false, true);
   const queried = await (await chat(request({ mode: 'chat', message: 'What are my tasks?', timezone: 'UTC' }))).json();
-  assert.equal(queried.message, 'Your Tasks are unavailable.');
+  assert.equal(queried.message, '');
 });
 test('all-day event uses exclusive dates and maps boundaries in user timezone', async () => {
   await mock({ message: '', selections: [], create: { ...event, all_day: true, start: '2026-10-15', end: '2026-10-16' } });
@@ -94,7 +94,7 @@ test('all-day event uses exclusive dates and maps boundaries in user timezone', 
 test('Google rejection never confirms creation or returns a fabricated card', async () => {
   const { writes } = await mock({ message: 'Saved successfully!', selections: [], create: task }, true);
   const result = await (await chat(request({ mode: 'chat', message: 'Create task', timezone: 'UTC' }))).json();
-  assert.equal(writes.length, 1); assert.match(result.message, /couldn't save.*API is disabled/);
+  assert.equal(writes.length, 1); assert.equal(result.message, '');
   assert.equal(result.activity_changed, undefined); assert.deepEqual(result.blocks, []);
 });
 test('clarification and queries never call the creation endpoint; Home cannot write', async () => {

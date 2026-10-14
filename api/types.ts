@@ -83,6 +83,7 @@ export type CatalogDatabase = {
     };
     Views: { [_ in never]: never };
     Functions: {
+      fuse_receive_suggestions: { Args: { suggestion_ids: string[]; expected_user_id: string }; Returns: undefined };
       fuse_set_user_topics: { Args: { topic_ids: string[] }; Returns: undefined };
     };
     Enums: { [_ in never]: never };

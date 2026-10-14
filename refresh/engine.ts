@@ -118,6 +118,13 @@ export function createRefreshCoordinator(deps: RefreshDependencies) {
     catch (error) { processing = { status: 'error', error: errorMessage(error) }; }
     if (!await unchanged()) return { status: 'discarded', reason: 'context-changed' };
 
+    // Keep the last valid output available after a transient AI failure. Its old
+    // timestamp keeps it eligible for retry rather than caching a failure for 30 minutes.
+    if (processing.status === 'error' && cached?.processing.status === 'completed'
+      && contextKey(cached.snapshot.userId, cached.snapshot.topicIds, cached.snapshot.connectionId) === scope) {
+      return { status: 'partial', record: cached };
+    }
+
     const record: CachedRefresh = { version: 2, completedAt: new Date(deps.now()).toISOString(), snapshot, processing };
     await deps.saveCache(record);
     if (!await unchanged()) {

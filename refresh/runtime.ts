@@ -30,7 +30,7 @@ const coordinator = createRefreshCoordinator({
   async readCache() {
     const cached = await readRefreshCache();
     // Old text-only/unconfigured caches must not postpone the first AI decision.
-    if (cached?.snapshot.userId && (cached.processing.status !== 'completed' || !cached.processing.response)) return null;
+    if (cached?.snapshot.userId && (cached.processing.status !== 'completed' || !cached.processing.response?.response_id)) return null;
     return cached;
   },
   saveCache: saveRefreshCache,

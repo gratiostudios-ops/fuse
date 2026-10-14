@@ -7,9 +7,13 @@ import { assertGoogleProviderEnabled } from './provider';
 import { registerGoogleCredentials } from '../organizer';
 
 let exchange: { code: string; result: Promise<Session> } | undefined;
+let successNavigationClaimed = false;
 
 export function getGoogleRedirectUri(): string {
-  return AuthSession.makeRedirectUri({ scheme: 'fuse', path: 'auth/callback', native: 'fuse://auth/callback' });
+  // Standalone Android/iOS apps must return through the registered app link,
+  // never Expo's development server URL.
+  if (Platform.OS !== 'web') return 'fuse://auth/callback';
+  return AuthSession.makeRedirectUri({ path: 'auth/callback' });
 }
 
 export function completeGoogleSignIn(callbackUrl: string): Promise<Session> {
@@ -37,6 +41,14 @@ export function completeGoogleSignIn(callbackUrl: string): Promise<Session> {
 
 export function clearGoogleSignInExchange(): void {
   exchange = undefined;
+  successNavigationClaimed = false;
+}
+
+/** The callback route and the browser result can both finish the same sign-in. */
+export function claimGoogleSignInNavigation(): boolean {
+  if (successNavigationClaimed) return false;
+  successNavigationClaimed = true;
+  return true;
 }
 
 export async function signInWithGoogle(): Promise<{ status: 'signed-in' | 'cancelled' | 'redirecting' }> {

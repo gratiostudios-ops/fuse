@@ -1,38 +1,76 @@
+import { getCachedUserSuggestions } from '../../api/suggestion-cache';
+import { useIsFocused } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors, fonts } from '../../src/theme';
-import { getUserSuggestions } from '../../api/user-suggestions';
-import type { Suggestion } from '../../api/types';
+import { getUserSuggestions, getReceivedSuggestions, subscribeUserSuggestions, retrySuggestionReceipts, type UserSuggestion } from '../../api/user-suggestions';
+import { SuggestionCard } from '../../src/suggestion-card';
 import { useAuth } from '../../src/auth-context';
 
 export default function SuggestionsScreen() {
   const { session } = useAuth();
-  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [feed, setFeed] = useState<{ userId: string | null; items: UserSuggestion[] }>({ userId: null, items: [] });
+  const userId = session?.user.id ?? null;
+  const suggestions = feed.userId === userId ? feed.items : [];
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
 
+  const focused = useIsFocused();
   useEffect(() => {
-    if (!session) { setSuggestions([]); return; }
+    if (!userId) { setFeed({ userId: null, items: [] }); setLoading(false); return; }
     let alive = true;
-    setLoading(true); setError('');
-    void getUserSuggestions(session.user.id).then(items => { if (alive) setSuggestions(items); })
-      .catch(reason => { if (alive) setError(reason instanceof Error ? reason.message : 'Could not load suggestions.'); })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [session?.user.id]);
+    let sequence = 0;
+    const owner = userId;
+    const update = async () => {
+      const current = ++sequence;
+      const local = getReceivedSuggestions(owner);
+      if (alive) setFeed(previous => ({ userId: owner, items: [...new Map([...local, ...(previous.userId === owner ? previous.items : [])].map(item => [item.id, item])).values()] }));
+      try {
+        const saved = await getUserSuggestions(owner);
+        if (alive && sequence === current) setFeed({ userId: owner, items: [...new Map([...getReceivedSuggestions(owner), ...saved].map(item => [item.id, item])).values()] });
+      } catch (reason) { console.warn('Saved suggestions unavailable', reason); }
+      finally { if (alive) setLoading(false); }
+    };
+    const unsubscribe = subscribeUserSuggestions(() => { void update(); });
+    void getCachedUserSuggestions(owner).then(cached => {
+      if (!alive) return;
+      if (sequence === 0) setFeed(previous => ({ userId: owner, items: [...new Map([
+        ...cached, ...(previous.userId === owner ? previous.items : []), ...getReceivedSuggestions(owner),
+      ].map(item => [item.id, item])).values()] }));
+      if (focused) {
+        setLoading(true);
+        void retrySuggestionReceipts(owner);
+        void update();
+      }
+    });
+    return () => { alive = false; unsubscribe(); };
+  }, [userId, focused]);
+
+  const groups = new Map<string, UserSuggestion[]>();
+  const ordered = [...suggestions].sort((a, b) => (b.recommended_at ?? '').localeCompare(a.recommended_at ?? ''));
+  for (const suggestion of ordered) {
+    const date = new Date(suggestion.recommended_at);
+    const valid = Number.isFinite(date.getTime());
+    const key = valid ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}` : 'undated';
+    const items = groups.get(key) ?? [];
+    items.push(suggestion);
+    groups.set(key, items);
+  }
+  const dateLabel = (value: string) => {
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? `${String(date.getDate()).padStart(2, '0')} ${date.toLocaleDateString('en-GB', { month: 'short' })}` : '';
+  };
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text accessibilityRole="header" style={styles.title}>Suggestions</Text>
       <View style={styles.suggestions}>
         {!session && <Text style={styles.message}>Sign in to see your suggestions.</Text>}
-        {loading && <ActivityIndicator color={colors.foreground} />}
-        {!!error && <Text accessibilityRole="alert" style={styles.message}>{error}</Text>}
-        {!loading && session && !error && !suggestions.length && <Text style={styles.message}>Your selected suggestions will appear here.</Text>}
-        {suggestions.map(suggestion => <Pressable key={suggestion.id} accessibilityRole="link" onPress={() => void Linking.openURL(suggestion.video_url)} style={styles.card}>
-          {suggestion.thumbnail_url ? <Image source={{ uri: suggestion.thumbnail_url }} style={styles.thumbnail} /> : <View style={styles.thumbnail} />}
-          <View style={styles.details}><Text numberOfLines={2} style={styles.cardTitle}>{suggestion.title}</Text>{suggestion.duration_minutes !== null && <Text style={styles.duration}>{suggestion.duration_minutes} min</Text>}</View>
-        </Pressable>)}
+        {loading && !suggestions.length && <ActivityIndicator color={colors.foreground} />}
+        {!loading && session && !suggestions.length && <Text style={styles.message}>Your selected suggestions will appear here.</Text>}
+        {[...groups].map(([date, items]) => <View key={date} style={styles.group}>
+          {!!dateLabel(items[0].recommended_at) && <Text style={styles.date}>{dateLabel(items[0].recommended_at)}</Text>}
+          <View style={styles.rows}>{items.map(suggestion => <SuggestionCard key={suggestion.id} suggestion={suggestion} />)}</View>
+        </View>)}
       </View>
     </ScrollView>
   );
@@ -42,11 +80,9 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background },
   content: { paddingTop: 7, paddingBottom: 24 },
   title: { marginLeft: 26, height: 51, fontFamily: fonts.heading, fontSize: 28, lineHeight: 31, color: colors.heading, includeFontPadding: false },
-  suggestions: { marginTop: 20, marginHorizontal: 26, gap: 14 },
+  suggestions: { marginTop: 34, marginLeft: 40, marginRight: 41, gap: 35 },
   message: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 20, color: colors.inactive },
-  card: { flexDirection: 'row', gap: 12, alignItems: 'center' },
-  thumbnail: { width: 75, height: 63, borderRadius: 9, backgroundColor: '#1E1E1E' },
-  details: { flex: 1, gap: 5 },
-  cardTitle: { fontFamily: fonts.suggestionTitle, fontSize: 14, lineHeight: 19, color: colors.foreground },
-  duration: { fontFamily: fonts.regular, fontSize: 12, color: colors.inactive },
+  group: { gap: 14 },
+  date: { marginLeft: -2, fontFamily: fonts.date, fontSize: 12, lineHeight: 15, color: '#B5B5B5', includeFontPadding: false },
+  rows: { gap: 29 },
 });

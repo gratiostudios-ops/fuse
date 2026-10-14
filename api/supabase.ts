@@ -1,10 +1,22 @@
 import './platform';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { CatalogDatabase } from './types';
-import { authStorage, canPersistSession, sessionLock } from './storage';
+import { authStorage, canPersistSession } from './storage';
 
 //supabase config
 type ConfigInput = { url: string | undefined; publishableKey: string | undefined };
+
+const diagnosticFetch: typeof fetch = async (input, init) => {
+  try {
+    return await fetch(input, init);
+  } catch (error) {
+    const requestUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    let host = 'unknown host';
+    try { host = new URL(requestUrl).host; } catch { /* Keep the log free of request headers and query values. */ }
+    console.error(`Supabase HTTPS request failed for ${host}:`, error);
+    throw error;
+  }
+};
 
 export function validateSupabaseConfig({ url, publishableKey }: ConfigInput) {
   if (!url?.trim() || !publishableKey?.trim()) {
@@ -42,13 +54,13 @@ export function getSupabaseClient(): SupabaseClient<CatalogDatabase> {
       publishableKey: process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
     });
     client = createClient<CatalogDatabase>(config.url, config.publishableKey, {
+      global: { fetch: diagnosticFetch },
       auth: {
         storage: authStorage,
         persistSession: canPersistSession,
         autoRefreshToken: canPersistSession,
         detectSessionInUrl: false,
         flowType: 'pkce',
-        ...(sessionLock ? { lock: sessionLock } : {}),
       },
     });
   }

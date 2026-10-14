@@ -1,6 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
 import { randomUUID } from 'expo-crypto';
-import { processLock } from '@supabase/supabase-js';
 
 // Supabase sessions can exceed SecureStore's per-value limits on some devices.
 const CHUNK_SIZE = 500;
@@ -63,4 +62,3 @@ export const authStorage = {
 };
 
 export const canPersistSession = true;
-export const sessionLock = processLock;

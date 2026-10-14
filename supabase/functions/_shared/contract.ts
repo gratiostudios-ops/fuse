@@ -43,6 +43,23 @@ export function parseFuseResponse(value: unknown): FuseResponse {
   return value as FuseResponse;
 }
 
+/** Home copy describes selected cards, never source completeness or free time. */
+export function homeSummary(blocks: readonly Block[]): string {
+  const types = new Set(blocks.map(block => block.type));
+  const activity = types.has('task') || types.has('schedule');
+  if (activity && types.has('suggestion')) return 'Here’s what’s coming up.';
+  if (types.has('task') && types.has('schedule')) return 'Here’s your upcoming plan.';
+  if (types.has('schedule')) return 'Here are your upcoming events.';
+  if (types.has('task')) return 'Here are your tasks.';
+  if (types.has('suggestion')) return 'Here are some suggestions for you.';
+  return 'Your plan will appear here when items are available.';
+}
+
+/** Remove only the retired generic prefix, preserving useful action/source errors. */
+export function stripLegacyLoadWarning(message: string): string {
+  return message.replace(/^\s*Some data could not be loaded \([^)]*\)\.\s*/i, '');
+}
+
 /** Model selects IDs; all displayed fields come from server-fetched rows. */
 export function buildResponse(value: unknown, candidates: Candidate[], home: boolean): FuseResponse {
   if (!object(value) || typeof value.message !== 'string' || !Array.isArray(value.selections)
@@ -56,7 +73,6 @@ export function buildResponse(value: unknown, candidates: Candidate[], home: boo
     if (!candidate || seen.has(key)) throw new Error('AI selected an unknown or duplicate record.');
     seen.add(key);
     blocks.push(candidate.block);
-    if (home && selection.reason) blocks.push({ type: 'text', data: { content: selection.reason } });
   }
-  return parseFuseResponse({ schema_version: 1, message: value.message, blocks });
+  return parseFuseResponse({ schema_version: 1, message: home ? homeSummary(blocks) : stripLegacyLoadWarning(value.message), blocks });
 }

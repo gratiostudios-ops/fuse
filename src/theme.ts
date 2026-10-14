@@ -13,6 +13,7 @@ export const colors = {
 export const fonts = {
   regular: 'Inter_400Regular',
   medium: 'Inter_500Medium',
+  semibold: 'Inter_600SemiBold',
   date: 'Inter_900Black',
   heading: 'CrimsonPro_700Bold',
   suggestionTitle: 'Poppins_600SemiBold',

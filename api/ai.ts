@@ -7,27 +7,30 @@ export type { FuseResponse, Block } from '../supabase/functions/_shared/contract
 export type ChatTurn = { role: 'user' | 'assistant'; text: string };
 const timezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
-export function askAI(message: string, history: ChatTurn[] = []): Promise<FuseResponse> {
+export function askAI(message: string, history: ChatTurn[] = [], signal?: AbortSignal): Promise<FuseResponse> {
   const input = message.trim();
   if (!input || input.length > 2000) return Promise.reject(new Error('Enter a message between 1 and 2,000 characters.'));
-  return invokeAI({ mode: 'chat', message: input, history: history.slice(-12).map(turn => ({ ...turn, text: turn.text.slice(0, 2000) })), timezone: timezone() });
+  return invokeAI({ mode: 'chat', message: input, history: history.slice(-12).map(turn => ({ ...turn, text: turn.text.slice(0, 2000) })), timezone: timezone() }, signal);
 }
 
 export function decideHome(previous: { type: string; id: string }[] = []): Promise<FuseResponse> {
   return invokeAI({ mode: 'home', timezone: timezone(), previous });
 }
 
-async function invokeAI(body: object): Promise<FuseResponse> {
+async function invokeAI(body: object, signal?: AbortSignal): Promise<FuseResponse> {
+  signal?.throwIfAborted();
   const client = getSupabaseClient();
   const { data: { session }, error: sessionError } = await client.auth.getSession();
   if (sessionError) throw sessionError;
   if (!session) throw new Error('Please sign in using the account menu before asking Fuse AI.');
 
+  signal?.throwIfAborted();
   const functionName = process.env.EXPO_PUBLIC_AI_FUNCTION_NAME?.trim() || 'fuse-ai';
   const { data, error } = await client.functions.invoke(functionName, {
-    body,
+    body, signal,
     headers: { Authorization: `Bearer ${session.access_token}` },
   });
+  signal?.throwIfAborted();
   if (error instanceof FunctionsHttpError) {
     let detail: unknown;
     try { detail = await error.context.json(); } catch { /* Response may not be JSON. */ }
@@ -39,6 +42,7 @@ async function invokeAI(body: object): Promise<FuseResponse> {
   const response = parseFuseResponse(data);
   if (body && 'mode' in body && body.mode === 'chat' && data?.activity_changed === true) {
     const { data: { session: current } } = await client.auth.getSession();
+    signal?.throwIfAborted();
     if (current?.user.id === session.user.id) {
       clearOrganizerCache();
       notifyOrganizerChanged('creation');

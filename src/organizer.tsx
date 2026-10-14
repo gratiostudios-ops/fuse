@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
-import { CheckIcon } from 'phosphor-react-native';
+import { ArrowClockwiseIcon, CheckIcon } from 'phosphor-react-native';
 import { colors, fonts } from './theme';
 import { loadOrganizer, initializeOrganizer, syncOrganizer, setOrganizerCompletion, requestDailyRecap, subscribeOrganizer, type OrganizerState } from '../api/organizer';
-import { addDays } from '../supabase/functions/_shared/organizer-domain';
+import { ActivityRow } from './activity-row';
 import type { Task, Schedule } from '../api/types';
 
 export function useOrganizer(userId: string | null) {
@@ -79,14 +79,6 @@ export function useOrganizer(userId: string | null) {
   return { state, error, loading, busy, refresh, toggle, recap, reload };
 }
 export type OrganizerController = ReturnType<typeof useOrganizer>;
-function formatEvent(event: Schedule, timezone: string) {
-  if (event.is_all_day) {
-    const lastDay = event.end_date ? addDays(event.end_date, -1) : event.start_date;
-    return `All day · ${event.start_date}${lastDay !== event.start_date ? ` – ${lastDay}` : ''}`;
-  }
-  const options: Intl.DateTimeFormatOptions = { timeZone: timezone, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' };
-  return `${new Date(event.valid_from).toLocaleString(undefined, options)} – ${new Date(event.valid_to).toLocaleString(undefined, options)}`;
-}
 export function OrganizerList({ controller, expanded }: { controller: OrganizerController; expanded: boolean }) {
   const { state, error, loading, busy, refresh, toggle } = controller;
   const [completed, setCompleted] = useState(false);
@@ -97,21 +89,19 @@ export function OrganizerList({ controller, expanded }: { controller: OrganizerC
   const connection = state?.connection;
   const lastRefresh = state?.fetched_at ? new Date(state.fetched_at) : null;
   const stale = !lastRefresh || Date.now() - lastRefresh.getTime() > 3600000;
-  const row = (kind: 'task' | 'schedule', item: Task | Schedule, detail: string) => <View key={`${kind}:${item.id}`} style={styles.row}>
-    <Pressable accessibilityRole="checkbox" accessibilityLabel={`${item.mark_completed ? 'Reopen' : 'Complete'} ${item.title}`}
+  const row = (kind: 'task' | 'schedule', item: Task | Schedule) => <ActivityRow key={kind + ':' + item.id} kind={kind} title={item.title}
+    date={kind === 'task' ? (item as Task).due_date : (item as Schedule).is_all_day ? (item as Schedule).start_date + 'T12:00:00' : (item as Schedule).valid_from}
+    allDay={kind === 'schedule' && (item as Schedule).is_all_day} timezone={state?.timezone} completed={item.mark_completed}
+    control={<Pressable accessibilityRole="checkbox" accessibilityLabel={(item.mark_completed ? 'Reopen ' : 'Complete ') + item.title}
       accessibilityState={{ checked: item.mark_completed, disabled: !!busy }} disabled={!!busy}
       onPress={() => { void toggle(kind, item); }} style={styles.checkTarget}>
       <View style={[styles.check, item.mark_completed && styles.checked]}>{item.mark_completed && <CheckIcon size={14} color={colors.background} />}</View>
-    </Pressable>
-    <View style={[styles.itemBody, { borderLeftColor: kind === 'task' ? '#D66767' : '#6596DB' }]}>
-      <Text style={styles.title}>{item.title}</Text><Text style={styles.detail}>{detail}</Text>
-    </View>
-  </View>;
+    </Pressable>} />;
   return <View style={styles.list}>
     <View style={styles.toolbar}>
       <Pressable accessibilityRole="button" accessibilityState={{ selected: !completed }} onPress={() => setCompleted(false)} style={styles.action}><Text style={!completed ? styles.active : styles.detail}>To do</Text></Pressable>
       <Pressable accessibilityRole="button" accessibilityState={{ selected: completed }} onPress={() => setCompleted(true)} style={styles.action}><Text style={completed ? styles.active : styles.detail}>Completed</Text></Pressable>
-      <Pressable accessibilityRole="button" disabled={!!busy} onPress={() => { void refresh(); }} style={styles.action}><Text style={styles.detail}>{busy === 'refresh' ? 'Refreshing…' : 'Refresh'}</Text></Pressable>
+      <Pressable accessibilityRole="button" accessibilityLabel="Refresh organizer" disabled={!!busy} onPress={() => { void refresh(); }} style={styles.action}><ArrowClockwiseIcon size={18} color={colors.inactive} /></Pressable>
     </View>
     <Text style={styles.detail}>{!connection || connection.connection_status !== 'connected' ? 'Connect Google Calendar to see tasks and events' : lastRefresh ? `${stale ? 'Stale · ' : ''}Refreshed ${lastRefresh.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Waiting for Google activities'}</Text>
     {!!connection?.last_error && <Text accessibilityRole="alert" style={styles.detail}>{connection.last_error}</Text>}
@@ -120,9 +110,9 @@ export function OrganizerList({ controller, expanded }: { controller: OrganizerC
     {!!error && <Text accessibilityRole="alert" style={styles.detail}>{error}</Text>}
     {loading ? <Text style={styles.detail}>Loading organizer…</Text> : state && <>
       <Text style={styles.section}>Tasks</Text>
-      {state.source_status.tasks !== 'ok' ? <Text style={styles.detail}>{state.source_status.tasks === 'not_connected' ? 'Connect Google Calendar to load tasks.' : 'Tasks are unavailable. Try refreshing.'}</Text> : taskRows.length ? taskRows.map(t => row('task', t, t.due_date ? `Due ${t.due_date}` : 'No deadline')) : <Text style={styles.detail}>No {completed ? 'completed' : 'unfinished'} tasks.</Text>}
+      {state.source_status.tasks !== 'ok' ? <Text style={styles.detail}>{state.source_status.tasks === 'not_connected' ? 'Connect Google Calendar to load tasks.' : 'Tasks are unavailable. Try refreshing.'}</Text> : taskRows.length ? taskRows.map(t => row('task', t)) : <Text style={styles.detail}>No {completed ? 'completed' : 'unfinished'} tasks.</Text>}
       <Text style={styles.section}>Events</Text>
-      {state.source_status.calendar !== 'ok' ? <Text style={styles.detail}>{state.source_status.calendar === 'not_connected' ? 'Connect Google Calendar to load events.' : 'Calendar is unavailable. Try refreshing.'}</Text> : eventRows.length ? eventRows.map(e => row('schedule', e, formatEvent(e, state.timezone))) : <Text style={styles.detail}>No {completed ? 'completed' : 'unfinished'} events.</Text>}
+      {state.source_status.calendar !== 'ok' ? <Text style={styles.detail}>{state.source_status.calendar === 'not_connected' ? 'Connect Google Calendar to load events.' : 'Calendar is unavailable. Try refreshing.'}</Text> : eventRows.length ? eventRows.map(e => row('schedule', e)) : <Text style={styles.detail}>No {completed ? 'completed' : 'unfinished'} events.</Text>}
     </>}
   </View>;
 }
@@ -142,15 +132,15 @@ export function DailyRecapView({ controller }: { controller: OrganizerController
   </View>;
 }
 const styles = StyleSheet.create({
-  list: { marginHorizontal: 24, paddingTop: 12, paddingBottom: 20, gap: 8 },
+  list: { paddingTop: 12, paddingBottom: 20, gap: 12 },
   toolbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' },
   action: { minHeight: 44, justifyContent: 'center' },
-  section: { fontFamily: fonts.medium, color: colors.foreground, fontSize: 14, marginTop: 10 },
+  section: { fontFamily: fonts.heading, color: '#FFFFFF', fontSize: 28, lineHeight: 31, marginTop: 10 },
   active: { fontFamily: fonts.medium, color: colors.foreground, fontSize: 12 },
   detail: { fontFamily: fonts.regular, color: colors.inactive, fontSize: 12, lineHeight: 18 },
   title: { fontFamily: fonts.medium, color: colors.foreground, fontSize: 14 },
   row: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#252525', paddingVertical: 8 },
-  checkTarget: { width: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  checkTarget: { position: 'absolute', right: 0, top: -2.5, width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   check: { height: 20, width: 20, borderWidth: 1, borderColor: colors.inactive, borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
   checked: { backgroundColor: colors.foreground, borderColor: colors.foreground },
   itemBody: { flex: 1, gap: 5, borderLeftWidth: 2, paddingLeft: 10 },

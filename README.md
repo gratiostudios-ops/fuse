@@ -18,7 +18,7 @@ npm run typecheck
 npm run export
 ```
 
-Home (`/`) and Suggestions (`/suggestions`) are Expo Router tabs. The hamburger opens the Google account screen (`/sign-in`). Organizer shows Google Tasks and Calendar events, with confirmed completion/reopening controls; Home and chat use server-verified Google activities. Suggestions contains its heading and one neutral demo thumbnail, ready for future content.
+Home (`/`) and Suggestions (`/suggestions`) are Expo Router tabs. The hamburger toggles a compact account drawer, showing name/email and Sign out. The drawer shifts the app canvas so the hamburger stays visible. `/sign-in` remains available for OAuth and connection recovery; the Calendar disconnect control is hidden while its API remains supported. Organizer shows Google Tasks and Calendar events, with confirmed completion/reopening controls; Home and chat use server-verified Google activities. Suggestions contains its heading and one neutral demo thumbnail, ready for future content.
 
 The layout follows the supplied 402 × 874 Figma reference. Wider windows center the 402-point shell; narrower devices use the available width. Bottom controls account for device safe areas. Fonts are bundled locally through the Expo Google Fonts packages; icons use Phosphor.
 
@@ -48,6 +48,14 @@ npx supabase functions deploy fuse-ai --project-ref YOUR_PROJECT_REF
 ```
 
 Switch all activity consumers together; no repository edit deploys functions or applies production SQL. Normal function actions verify the Supabase user; scheduled work verifies the cron secret even though gateway JWT verification is disabled. Configure an external recurring POST to organizer with `{ "action": "scheduled" }` and `Authorization: Bearer ORGANIZER_CRON_SECRET` for daily recaps. No scheduler or push delivery is installed here.
+
+## Home interaction and navigation
+
+Home uses dynamic content with blue Calendar cards and red Tasks cards, a short neutral summary, and no duplicate card explanations or “Let’s Go” button. Source diagnostics remain actionable in Organizer rather than appearing as a generic Home warning. Recap and refresh use bold Phosphor icons; recap is fainter.
+
+Focusing or editing the composer leaves Home visible. Send switches to the response view; Done appears two seconds after complete output or a terminal error and restores Home. Recap opens separately and uses the composer’s Stop/Clear control to return Home. Stop/Clear is available during generation and after a result when no draft exists; typing a follow-up restores Send. It clears the view and ignores late responses. Client cancellation cannot undo a Google write already completed; activities refresh after an interrupted creation so saved items can appear. Never assume stopping means a write failed or automatically retry a creation.
+
+Finger swipe directions: on Home, right-to-left opens Suggestions and left-to-right opens Accounts; on Suggestions, left-to-right returns Home; on Accounts, right-to-left closes the drawer. Hamburger toggles the drawer from either tab. Inputs, controls, and vertical scrolling do not trigger navigation. Escape/Android Back dismisses the drawer. Sign out clears private state, closes Accounts, and returns Home.
 
 ## Activity, refresh, and recap behavior
 
@@ -79,7 +87,7 @@ Example request body for a task:
 }
 ```
 
-For an event, use `kind: "schedule"`, `due_date: null`, and explicit start/end ISO timestamps with offsets. All-day events use date strings and an exclusive end date. Chat asks for missing title or event timing/duration rather than inventing them, and clarifies task versus Calendar intent when needed. Google Tasks deadlines are date-only; exact time slots belong in Calendar. Chat supports one creation per turn; editing/deleting through chat is not included. Completion/reopening remains available in Organizer. Writes are never automatically retried; after an uncertain response, check Google before retrying to avoid duplicate items.
+For an event, use `kind: "schedule"`, `due_date: null`, and a start ISO timestamp with an offset. An omitted/null end defaults to 60 minutes after start; explicit end times or durations are preserved. All-day events use date strings and an exclusive end date, defaulting to one day if end is omitted/null. Chat asks for missing title, date, or start time, and clarifies task versus Calendar intent when needed. Google Tasks deadlines are date-only; exact time slots belong in Calendar. Chat supports one creation per turn; editing/deleting through chat is not included. Completion/reopening remains available in Organizer. Writes are never automatically retried; after an uncertain response, check Google before retrying to avoid duplicate items.
 
 Deploy both `organizer` and `fuse-ai` to enable this flow; no new migration or OAuth scopes are required beyond the Google-direct setup.
 
@@ -89,7 +97,7 @@ Deploy both `organizer` and `fuse-ai` to enable this flow; no new migration or O
 npm run typecheck
 npm run test:refresh
 npx tsx --test supabase/functions/tests/google.test.ts
-npx tsx --test supabase/functions/tests/create.test.ts
+npx tsx --test supabase/functions/tests/create.test.ts supabase/functions/tests/presentation.test.ts
 node scripts/sync-ai-prompts.mjs --check
 ```
 

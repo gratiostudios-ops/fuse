@@ -15,7 +15,7 @@ export default function AuthCallbackScreen() {
       if (typeof value === 'string' && ['code', 'error', 'error_description'].includes(key)) url.searchParams.set(key, value);
     }
     void completeGoogleSignIn(url.href).then(() => {
-      if (alive) router.replace('/sign-in');
+      if (alive) router.replace('/');
     }).catch(reason => {
       if (alive) setError(reason instanceof Error ? reason.message : 'Could not complete Google sign-in.');
     });

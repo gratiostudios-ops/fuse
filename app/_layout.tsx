@@ -4,7 +4,7 @@ import { Slot } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
-import { Inter_400Regular, Inter_500Medium, Inter_900Black } from '@expo-google-fonts/inter';
+import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_900Black } from '@expo-google-fonts/inter';
 import { CrimsonPro_700Bold } from '@expo-google-fonts/crimson-pro';
 import { Poppins_400Regular, Poppins_600SemiBold } from '@expo-google-fonts/poppins';
 import { colors } from '../src/theme';
@@ -17,6 +17,7 @@ export default function RootLayout() {
   const [loaded, error] = useFonts({
     Inter_400Regular,
     Inter_500Medium,
+    Inter_600SemiBold,
     Inter_900Black,
     CrimsonPro_700Bold,
     Poppins_400Regular,

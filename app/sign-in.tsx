@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GoogleLogoIcon } from 'phosphor-react-native';
 import { signInWithGoogle, signOut } from '../api/auth';
 import { useAuth } from '../src/auth-context';
-import { connectOrganizer, disconnectOrganizer, retryGoogleRegistration, saveOrganizerTimezone } from '../api/organizer';
+import { connectOrganizer, retryGoogleRegistration, saveOrganizerTimezone } from '../api/organizer';
 import { useOrganizer } from '../src/organizer';
 import { colors, fonts } from '../src/theme';
 
@@ -30,7 +30,7 @@ export default function SignInScreen() {
     try {
       const result = await signInWithGoogle();
       if (result.status === 'cancelled') setMessage('Sign-in cancelled. You can try again.');
-      if (result.status === 'signed-in') router.replace('/sign-in');
+      if (result.status === 'signed-in') router.replace('/');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not connect your Google account.');
     } finally {
@@ -72,9 +72,6 @@ export default function SignInScreen() {
           </Pressable>
           {organizer.state?.connection?.connection_status !== 'connected' && <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void integration(retryGoogleRegistration); }} style={styles.back}>
             <Text style={styles.backText}>Retry Calendar connection</Text>
-          </Pressable>}
-          {organizer.state?.connection?.connection_status !== 'disconnected' && organizer.state?.connection && <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void integration(disconnectOrganizer); }} style={styles.back}>
-            <Text style={styles.backText}>Disconnect Google Calendar</Text>
           </Pressable>}
           <Text style={styles.description}>Daily recap time zone (9 PM)</Text>
           <TextInput accessibilityLabel="Daily recap time zone" style={styles.timezone} value={timezone} onChangeText={setTimezone} autoCapitalize="none" placeholder="Asia/Kolkata" placeholderTextColor={colors.placeholder} />

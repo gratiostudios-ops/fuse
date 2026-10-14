@@ -16,12 +16,15 @@ const listeners = new Set<(reason: string) => void>();
 export const notifyOrganizerChanged = (reason = 'sync') => { for (const listener of listeners) listener(reason); };
 export const subscribeOrganizer = (listener: (reason: string) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 export const deviceTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-export async function organizerAction<T>(body: object): Promise<T> {
+export async function organizerAction<T>(body: object, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted();
   const client = getSupabaseClient();
   const { data: { session }, error: authError } = await client.auth.getSession();
   if (authError) throw authError;
   if (!session) throw new Error('Sign in to use your organizer.');
-  const { data, error } = await client.functions.invoke('organizer', { body, headers: { Authorization: `Bearer ${session.access_token}` } });
+  signal?.throwIfAborted();
+  const { data, error } = await client.functions.invoke('organizer', { body, signal, headers: { Authorization: `Bearer ${session.access_token}` } });
+  signal?.throwIfAborted();
   if (error instanceof FunctionsHttpError) {
     const detail = await error.context.json().catch(() => null);
     throw new Error(typeof detail?.error === 'string' ? detail.error : 'Organizer is unavailable. Check backend setup.');
@@ -76,8 +79,9 @@ export async function setOrganizerCompletion(kind: 'task' | 'schedule', item: Ta
   const saved = await organizerAction<Task | Schedule>({ action: 'complete', kind, ...source, completed });
   clearOrganizerCache(); notifyOrganizerChanged('completion'); return saved;
 }
-export async function requestDailyRecap() {
-  const result = await organizerAction<{ recap: DailyRecap | null; message?: string }>({ action: 'recap' });
+export async function requestDailyRecap(signal?: AbortSignal) {
+  const result = await organizerAction<{ recap: DailyRecap | null; message?: string }>({ action: 'recap' }, signal);
+  signal?.throwIfAborted();
   notifyOrganizerChanged(); return result;
 }
 export async function connectOrganizer() { return signInWithGoogle(); }

@@ -29,16 +29,24 @@ export function validateCreateParams(value: unknown) {
     || !value.title.trim() || value.title.length > 1024) throw new HttpError(400, 'Provide a task or event title');
   if (value.description != null && (typeof value.description !== 'string' || value.description.length > 8192)) throw new HttpError(400, 'Invalid description');
   if (typeof value.all_day !== 'boolean') throw new HttpError(400, 'Specify whether the event is all-day');
+  let resolvedEnd = value.end ?? null;
   if (value.kind === 'task') {
     if (value.due_date != null && !date(value.due_date)) throw new HttpError(400, 'Task due date must be YYYY-MM-DD');
     if (value.start != null || value.end != null || value.all_day) throw new HttpError(400, 'Tasks have a due date, not a scheduled time. Use a Calendar event for a time slot.');
   } else {
     if (value.due_date != null) throw new HttpError(400, 'Calendar events use start and end, not a task due date');
     const valid = value.all_day ? date : timestamp;
-    if (!valid(value.start) || !valid(value.end) || Date.parse(value.end) <= Date.parse(value.start)) throw new HttpError(400, value.all_day ? 'Provide all-day start and exclusive end dates' : 'Provide start and end timestamps with timezone offsets; end must follow start');
+    if (!valid(value.start)) throw new HttpError(400, value.all_day ? 'Provide a valid all-day start date' : 'Provide a start timestamp with timezone offsets');
+    if (value.end == null) {
+      // Google requires an end boundary. Apply defaults here, not in the model.
+      const end = new Date(Date.parse(value.start) + (value.all_day ? 86_400_000 : 3_600_000));
+      if (!Number.isFinite(end.getTime())) throw new HttpError(400, 'Event end is outside the supported date range');
+      resolvedEnd = value.all_day ? end.toISOString().slice(0, 10) : end.toISOString();
+    }
+    if (!valid(resolvedEnd) || Date.parse(resolvedEnd) <= Date.parse(value.start)) throw new HttpError(400, value.all_day ? 'Provide an exclusive end date after the start date' : 'Provide an end timestamp with timezone offsets; end must follow start');
   }
   return { kind: value.kind as 'task' | 'schedule', title: value.title.trim(), description: value.description ?? null,
-    due_date: value.due_date ?? null, start: value.start ?? null, end: value.end ?? null, all_day: value.all_day };
+    due_date: value.due_date ?? null, start: value.start ?? null, end: resolvedEnd, all_day: value.all_day };
 }
 
 export async function createGoogleActivity(db: Store, userId: string, value: unknown, timezone: unknown) {

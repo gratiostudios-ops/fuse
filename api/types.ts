@@ -14,6 +14,8 @@ export type Suggestion = {
 
 export type GetSuggestionsParams = { topicId: string };
 
+export type Topic = { id: string; name: string; created_at: string };
+
 export type Task = {
   id: string; title: string; description: string | null;
   due_date: string | null; mark_completed: boolean; completed_at?: string | null;
@@ -61,14 +63,28 @@ export type CatalogDatabase = {
         ];
       };
       topics: {
-        Row: { id: string; name: string; created_at: string };
+        Row: Topic;
         Insert: { id?: string; name: string; created_at?: string };
         Update: { id?: string; name?: string; created_at?: string };
         Relationships: [];
       };
+      user_suggestions: {
+        Row: { id: string; user_id: string; suggestion_id: string; recommended_at: string };
+        Insert: { id?: string; user_id: string; suggestion_id: string; recommended_at?: string };
+        Update: { id?: string; user_id?: string; suggestion_id?: string; recommended_at?: string };
+        Relationships: [];
+      };
+      user_topics: {
+        Row: { user_id: string; topic_id: string };
+        Insert: { user_id: string; topic_id: string };
+        Update: { user_id?: string; topic_id?: string };
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
-    Functions: { [_ in never]: never };
+    Functions: {
+      fuse_set_user_topics: { Args: { topic_ids: string[] }; Returns: undefined };
+    };
     Enums: { [_ in never]: never };
     CompositeTypes: { [_ in never]: never };
   };

@@ -75,7 +75,7 @@ test('Calendar creation preserves requested offsets and uses primary calendar', 
   assert.deepEqual(writes[0].body.start, { dateTime: event.start, timeZone: 'Asia/Kolkata' });
   assert.equal(result.blocks[0].data.start, '2026-10-15T03:30:00.000Z');
 });
-test('Calendar success excludes unrelated Tasks read warning, but queries retain missing-source notice', async () => {
+test('Calendar success and queries exclude the partial-read diagnostic from UI messages', async () => {
   await mock({ message: 'Creating', selections: [], create: event }, false, true);
   const saved = await (await chat(request({ mode: 'chat', message: 'Schedule Team meeting tomorrow 9 to 10', timezone: 'Asia/Kolkata' }))).json();
   assert.equal(saved.activity_changed, true);
@@ -83,7 +83,7 @@ test('Calendar success excludes unrelated Tasks read warning, but queries retain
   assert.equal(saved.blocks[0].type, 'schedule');
   await mock({ message: 'Your Tasks are unavailable.', selections: [], create: null }, false, true);
   const queried = await (await chat(request({ mode: 'chat', message: 'What are my tasks?', timezone: 'UTC' }))).json();
-  assert.match(queried.message, /Some data could not be loaded \(tasks\)/);
+  assert.equal(queried.message, 'Your Tasks are unavailable.');
 });
 test('all-day event uses exclusive dates and maps boundaries in user timezone', async () => {
   await mock({ message: '', selections: [], create: { ...event, all_day: true, start: '2026-10-15', end: '2026-10-16' } });
@@ -98,9 +98,9 @@ test('Google rejection never confirms creation or returns a fabricated card', as
   assert.equal(result.activity_changed, undefined); assert.deepEqual(result.blocks, []);
 });
 test('clarification and queries never call the creation endpoint; Home cannot write', async () => {
-  const { writes, endpointBodies } = await mock({ message: 'What start and end time?', selections: [], create: null });
+  const { writes, endpointBodies } = await mock({ message: 'What start time?', selections: [], create: null });
   const result = await (await chat(request({ mode: 'chat', message: 'Schedule a meeting', timezone: 'UTC' }))).json();
-  assert.match(result.message, /start and end/); assert.equal(endpointBodies.length, 0);
+  assert.match(result.message, /start time/); assert.equal(endpointBodies.length, 0);
   const home = await mock({ message: 'Home', selections: [], create: event });
   await chat(request({ mode: 'home', timezone: 'UTC' }));
   assert.equal(writes.length, 0); assert.equal(home.writes.length, 0); assert.equal(home.endpointBodies.length, 0);
@@ -115,4 +115,38 @@ test('create endpoint requires authentication and rejects forged ownership or in
   assert.throws(() => validateCreateParams({ ...event, end: event.start }), /end must follow/);
   assert.throws(() => validateCreateParams({ ...event, start: '2026-10-15T09:00:00' }), /offsets/);
   assert.equal(writes.length, 0);
+});
+
+
+test('Calendar endpoint supplies one hour when end is null or omitted, including midnight crossings', async () => {
+  for (const suppliedEnd of [null, undefined]) {
+    const start = '2026-10-15T23:30:00+05:30';
+    const params = { ...event, start, end: suppliedEnd };
+    const { writes } = await mock({ message: '', selections: [], create: params });
+    const result = await (await chat(request({ mode: 'chat', message: 'Schedule Team meeting tomorrow at 11:30 PM', timezone: 'Asia/Kolkata' }))).json();
+    assert.equal(result.activity_changed, true);
+    assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0].body.end, { dateTime: '2026-10-15T19:00:00.000Z', timeZone: 'Asia/Kolkata' });
+    assert.equal(Date.parse(result.blocks[0].data.end) - Date.parse(result.blocks[0].data.start), 3_600_000);
+  }
+});
+test('all-day default is one day with an exclusive next-day end across month and year boundaries', async () => {
+  for (const [start, end] of [['2026-10-31', '2026-11-01'], ['2026-12-31', '2027-01-01']]) {
+    const { writes } = await mock({ message: '', selections: [], create: { ...event, all_day: true, start, end: null } });
+    const result = await (await chat(request({ mode: 'chat', message: 'Schedule all-day Team meeting', timezone: 'Asia/Kolkata' }))).json();
+    assert.equal(result.activity_changed, true);
+    assert.deepEqual(writes[0].body.start, { date: start });
+    assert.deepEqual(writes[0].body.end, { date: end });
+    assert.equal(result.blocks[0].data.end_date, end);
+  }
+});
+test('default duration validates start first and never changes explicit end boundaries', () => {
+  assert.equal(validateCreateParams(event).end, event.end);
+  assert.equal(validateCreateParams({ ...event, all_day: true, start: '2026-10-15', end: '2026-10-18' }).end, '2026-10-18');
+  assert.throws(() => validateCreateParams({ ...event, start: null, end: null }), /start timestamp/);
+  assert.throws(() => validateCreateParams({ ...event, start: '2026-02-30T09:00:00Z', end: null }), /start timestamp/);
+  assert.throws(() => validateCreateParams({ ...event, all_day: true, start: '2026-02-30', end: null }), /start date/);
+  assert.throws(() => validateCreateParams({ ...event, end: 'invalid' }), /end timestamp/);
+  assert.throws(() => validateCreateParams({ ...event, all_day: true, start: '2026-10-15', end: '2026-10-15' }), /exclusive end/);
+  assert.equal(validateCreateParams(task).due_date, task.due_date);
 });

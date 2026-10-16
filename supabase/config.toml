@@ -6,3 +6,11 @@ verify_jwt = false
 [functions.organizer]
 # POST verifies user JWTs or the dedicated recap scheduler secret; Supabase handles OAuth.
 verify_jwt = false
+
+[functions.admin-catalog]
+# Handler independently verifies the user's JWT and admin membership.
+verify_jwt = false
+
+[functions.catalog-worker]
+# Only the dedicated CATALOG_WORKER_SECRET is accepted by the handler.
+verify_jwt = false

@@ -93,9 +93,9 @@ export async function handleRequest(req: Request): Promise<Response> {
     const suggestions = await source(() => {
       const topicIds = topics.data.map(topic => String(topic.topic_id)).filter(Boolean);
       if (!topicIds.length) return Promise.resolve([]);
-      return rows('suggestions', 'id,title,description,video_url,thumbnail_url,duration_minutes,is_active,suggestion_topics!inner(topic_id)', {
-        'suggestion_topics.topic_id': `in.(${topicIds.join(',')})`, is_active: 'eq.true',
-      }, 'created_at.desc,id.asc');
+      // The invoker-scoped RPC matches saved topics and excludes received videos
+      // before pagination, so old receipts cannot crowd unseen candidates out.
+      return rows('rpc/fuse_unseen_suggestions', 'id,title,description,video_url,thumbnail_url,duration_minutes,is_active', {}, 'created_at.desc,id.asc');
     });
     const tasks = { status: google.source_status.tasks === 'ok' ? 'ok' : 'error', data: google.tasks.filter(t => !home || !t.mark_completed) };
     const schedules = { status: google.source_status.calendar === 'ok' ? 'ok' : 'error', data: google.schedules.filter(s => !home || !s.mark_completed && Date.parse(s.valid_to) >= now.getTime()) };

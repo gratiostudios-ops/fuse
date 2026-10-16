@@ -16,15 +16,15 @@ begin
 end $$;
 
 -- Atomic per-user budget; clients cannot edit counters or impersonate a user.
-create table if not exists public.fuse_ai_limits (
+create table if not exists public.ai_limits (
   user_id uuid references auth.users(id) on delete cascade,
   mode text check (mode in ('chat', 'home')),
   window_start timestamptz not null,
   request_count integer not null,
   primary key (user_id, mode)
 );
-alter table public.fuse_ai_limits enable row level security;
-revoke all on public.fuse_ai_limits from public, anon, authenticated;
+alter table public.ai_limits enable row level security;
+revoke all on public.ai_limits from public, anon, authenticated;
 create or replace function public.fuse_ai_allow_request(request_mode text)
 returns boolean language plpgsql security definer set search_path = '' as $$
 declare
@@ -36,7 +36,7 @@ begin
   if owner_id is null or request_mode is null or request_mode not in ('chat', 'home') then return false; end if;
   period := case when request_mode = 'home' then interval '1 hour' else interval '10 minutes' end;
   budget := case when request_mode = 'home' then 6 else 20 end;
-  insert into public.fuse_ai_limits as limits (user_id, mode, window_start, request_count)
+  insert into public.ai_limits as limits (user_id, mode, window_start, request_count)
     values (owner_id, request_mode, now(), 1)
   on conflict (user_id, mode) do update set
     window_start = case when limits.window_start <= now() - period then now() else limits.window_start end,

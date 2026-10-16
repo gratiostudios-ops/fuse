@@ -1,7 +1,10 @@
 import { KeyboardVisibilityContext, useKeyboardLayout } from '../../src/keyboard-layout';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Animated, BackHandler, Image, Keyboard, KeyboardAvoidingView, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { AccessibilityInfo, ActivityIndicator, BackHandler, Image, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
+import Animated from 'react-native-reanimated';
+import { GestureDetector } from 'react-native-gesture-handler';
+import { useNavigationMotion } from '../../src/navigation-motion';
 import { Tabs, TabList, TabSlot, TabTrigger } from 'expo-router/ui';
 import { router, usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -13,7 +16,7 @@ import type { Topic } from '../../api/types';
 import { getUserTopicIds, setUserTopicIds } from '../../api/user-topics';
 import { getRefreshTopicIds, setRefreshTopicIds } from '../../refresh';
 import { useAuth } from '../../src/auth-context';
-import { NavigationGestureBoundary, NavigationGestureContext, swipeDestination } from '../../src/navigation-gestures';
+import { NavigationGestureBoundary, NavigationGestureContext } from '../../src/navigation-gestures';
 import { colors, fonts } from '../../src/theme';
 
 export default function TabLayout() {
@@ -30,47 +33,35 @@ export default function TabLayout() {
   const [topics, setTopics] = useState<Topic[]>([]);
   const [topicIds, setTopicIds] = useState<string[]>([]);
   const [topicsOpen, setTopicsOpen] = useState(false);
-  const shift = useRef(new Animated.Value(0)).current;
-  const page = useRef(new Animated.Value(suggestionsActive ? -1 : 0)).current;
   const [reduceMotion, setReduceMotion] = useState(false);
   useEffect(() => {
     void AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion);
     const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
     return () => subscription.remove();
   }, []);
-  useEffect(() => {
-    Animated.timing(page, { toValue: suggestionsActive ? -1 : 0, duration: reduceMotion ? 0 : 280, useNativeDriver: true }).start();
-  }, [suggestionsActive, page, reduceMotion]);
-  const excluded = useRef(false);
-  const navigationPending = useRef(false);
-  const currentPath = useRef(pathname);
   const drawerWidth = Math.min(230, width * 230 / 402);
+  const changePage = useCallback((suggestions: boolean) => {
+    router.navigate(suggestions ? '/suggestions' : '/');
+  }, []);
+  const motion = useNavigationMotion({ width, panelWidth: drawerWidth, panelOpen: drawerOpen, suggestions: suggestionsActive, reduceMotion, onPanelChange: setDrawerOpen, onPageChange: changePage });
   useEffect(() => { if (error || authError) console.warn('Account action unavailable', error || authError); }, [error, authError]);
   const metadata = session?.user.user_metadata;
   const name = metadata?.full_name || metadata?.name || session?.user.email?.split('@')[0] || 'Account';
 
   useEffect(() => {
-    if (drawerOpen) {
-      Keyboard.dismiss();
-      if (Platform.OS === 'web' && document.activeElement instanceof HTMLElement) document.activeElement.blur();
-    }
-    Animated.timing(shift, { toValue: drawerOpen ? drawerWidth : 0, duration: reduceMotion ? 0 : 220, useNativeDriver: true }).start();
-  }, [drawerOpen, drawerWidth, shift, reduceMotion]);
+    if (!drawerOpen) return;
+    Keyboard.dismiss();
+    if (Platform.OS === 'web' && document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  }, [drawerOpen]);
   useEffect(() => { setDrawerOpen(false); setError(null); }, [session?.user.id]);
   useEffect(() => {
-    if (currentPath.current !== pathname) {
-      currentPath.current = pathname;
-      navigationPending.current = false;
-    }
-  }, [pathname]);
-  useEffect(() => {
-    if (!drawerOpen || !session) return;
+    if (!drawerOpen || !motion.panelSettled || !session) return;
     let alive = true;
     void Promise.all([getTopics(), getUserTopicIds(session.user.id)]).then(([catalog, selected]) => {
       if (alive) { setTopics(catalog); setTopicIds(selected); }
     }).catch(reason => { if (alive) setError(reason instanceof Error ? reason.message : 'Could not load topics.'); });
     return () => { alive = false; };
-  }, [drawerOpen, session]);
+  }, [drawerOpen, motion.panelSettled, session]);
   useEffect(() => {
     if (!drawerOpen) return;
     const back = BackHandler.addEventListener('hardwareBackPress', () => { setDrawerOpen(false); return true; });
@@ -78,40 +69,6 @@ export default function TabLayout() {
     if (Platform.OS === 'web') window.addEventListener('keydown', escape);
     return () => { back.remove(); if (Platform.OS === 'web') window.removeEventListener('keydown', escape); };
   }, [drawerOpen]);
-
-  const gestures = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponderCapture: event => {
-      // Capture resets before a nested NavigationGestureBoundary marks this touch.
-      const target = event.target as unknown as { closest?: (selector: string) => unknown };
-      excluded.current = !!target?.closest?.('input, textarea, button, a, [role="button"], [role="tab"], [contenteditable="true"]');
-      return false;
-    },
-    onMoveShouldSetPanResponder: (_event, state) => !excluded.current && state.numberActiveTouches === 1 && Math.abs(state.dx) > 8 && Math.abs(state.dx) > Math.abs(state.dy) * 1.3,
-    onPanResponderMove: (_event, state) => {
-      if (excluded.current || navigationPending.current || reduceMotion) return;
-      if (drawerOpen) shift.setValue(Math.max(0, Math.min(drawerWidth, drawerWidth + state.dx)));
-      else if (!suggestionsActive && state.dx > 0) shift.setValue(Math.min(drawerWidth, state.dx));
-      else page.setValue(Math.max(-1, Math.min(0, (suggestionsActive ? -1 : 0) + state.dx / width)));
-    },
-    onPanResponderTerminate: () => {
-      Animated.timing(page, { toValue: suggestionsActive ? -1 : 0, duration: reduceMotion ? 0 : 220, useNativeDriver: true }).start();
-      Animated.timing(shift, { toValue: drawerOpen ? drawerWidth : 0, duration: reduceMotion ? 0 : 220, useNativeDriver: true }).start();
-    },
-    onPanResponderRelease: (_event, state) => {
-      if (excluded.current || navigationPending.current) return;
-      const destination = swipeDestination(state.dx, state.dy, drawerOpen, suggestionsActive);
-      if (!destination) {
-        Animated.timing(page, { toValue: suggestionsActive ? -1 : 0, duration: reduceMotion ? 0 : 220, useNativeDriver: true }).start();
-        Animated.timing(shift, { toValue: drawerOpen ? drawerWidth : 0, duration: reduceMotion ? 0 : 220, useNativeDriver: true }).start();
-      }
-      if (destination === 'close') setDrawerOpen(false);
-      else if (destination === 'accounts') setDrawerOpen(true);
-      else if (destination === 'home' || destination === 'suggestions') {
-        navigationPending.current = true;
-        router.navigate(destination === 'home' ? '/' : '/suggestions');
-      }
-    },
-  }), [drawerOpen, suggestionsActive, width, drawerWidth, reduceMotion, page, shift]);
 
   async function accountAction() {
     setBusy(true); setError(null);
@@ -137,15 +94,16 @@ export default function TabLayout() {
 
   return (
     <KeyboardVisibilityContext.Provider value={keyboardVisible}>
-    <NavigationGestureContext.Provider value={excluded}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : Platform.OS === 'android' ? 'height' : undefined} style={[styles.frame, webHeight !== null && { flex: undefined, flexGrow: 0, flexShrink: 0, flexBasis: webHeight, height: webHeight }]} onLayout={event => setWidth(event.nativeEvent.layout.width)} {...gestures.panHandlers}>
-        <Animated.View pointerEvents={drawerOpen ? 'auto' : 'none'} accessibilityElementsHidden={!drawerOpen} importantForAccessibility={drawerOpen ? 'auto' : 'no-hide-descendants'} accessibilityLabel="Account panel" style={[styles.drawer, { opacity: shift.interpolate({ inputRange: [0, drawerWidth], outputRange: [0, 1], extrapolate: 'clamp' }) }, { width: drawerWidth, top: Math.max(52, insets.top + 16), bottom: 100 + insets.bottom }]}>
+    <NavigationGestureContext.Provider value={motion.gesture}>
+    <GestureDetector gesture={motion.gesture}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : Platform.OS === 'android' ? 'height' : undefined} style={[styles.frame, webHeight !== null && { flex: undefined, flexGrow: 0, flexShrink: 0, flexBasis: webHeight, height: webHeight }]} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
+        <Animated.View pointerEvents={drawerOpen ? 'auto' : 'none'} accessibilityElementsHidden={!drawerOpen} importantForAccessibility={drawerOpen ? 'auto' : 'no-hide-descendants'} accessibilityLabel="Account panel" style={[styles.drawer, motion.panelStyle, { width: drawerWidth, top: Math.max(52, insets.top + 16), bottom: 100 + insets.bottom }]}>
           {session ? <View style={styles.accountDetails}>
             <View style={styles.identity}>
               <Text style={styles.name}>{String(name)}</Text>
               <Text style={styles.email}>{session.user.email ?? ''}</Text>
             </View>
-            <View style={[styles.section, styles.topicsSection]}>
+            <NavigationGestureBoundary style={[styles.section, styles.topicsSection]}>
               <Text style={styles.sectionLabel}>Topics</Text>
               <View style={styles.topicChips}>{topics.filter(topic => topicIds.includes(topic.id)).map(topic => <Pressable key={topic.id} accessibilityRole="button" onPress={() => void toggleTopic(topic.id)} style={styles.topicChip}><Text style={styles.topicText}>{topic.name}</Text></Pressable>)}</View>
               <Pressable accessibilityRole="button" accessibilityLabel="Add topic" onPress={() => setTopicsOpen(value => !value)} style={styles.addTopic}><Text style={styles.addTopicText}>Add +</Text></Pressable>
@@ -156,7 +114,7 @@ export default function TabLayout() {
                   <View style={[styles.topicCheckbox, selected && styles.topicCheckboxSelected]}>{selected && <CheckIcon size={12} color="#101010" weight="bold" />}</View>
                 </Pressable>;
               })}</ScrollView>}
-            </View>
+            </NavigationGestureBoundary>
             <View style={[styles.section, styles.connectorsSection]}>
               <Text style={styles.sectionLabel}>Connectors</Text>
               <View style={styles.calendarConnector}>
@@ -190,7 +148,7 @@ export default function TabLayout() {
             <TabTrigger name="home" href="/" />
             <TabTrigger name="suggestions" href="/suggestions" />
           </TabList>
-          <Animated.View style={[styles.canvas, { transform: [{ translateX: shift }] }]}>
+          <Animated.View style={[styles.canvas, motion.canvasStyle]}>
             <View style={styles.canvas}>
             <View style={[styles.header, { height: headerHeight }]}>
               <NavigationGestureBoundary style={[styles.menu, { top: Math.max(58, insets.top + 2) }]}>
@@ -202,7 +160,7 @@ export default function TabLayout() {
             <TabSlot style={[styles.content, { overflow: 'hidden' }]} detachInactiveScreens={false} renderFn={(descriptor, { isFocused }) => (
               <Animated.View key={descriptor.route.key} pointerEvents={isFocused && !drawerOpen ? 'auto' : 'none'}
                 accessibilityElementsHidden={!isFocused || drawerOpen} importantForAccessibility={isFocused && !drawerOpen ? 'auto' : 'no-hide-descendants'}
-                style={[StyleSheet.absoluteFill, { transform: [{ translateX: Animated.multiply(Animated.add(page, descriptor.route.name === 'suggestions' ? 1 : 0), width) }] }]}>
+                style={[StyleSheet.absoluteFill, descriptor.route.name === 'suggestions' ? motion.suggestionsStyle : motion.homeStyle]}>
                 {descriptor.render()}
               </Animated.View>
             )} />
@@ -216,12 +174,13 @@ export default function TabLayout() {
               </TabTrigger>
             </View>
             <View style={[styles.footer, { height: 40 + insets.bottom }, keyboardVisible && { display: 'none' }]}><Text style={styles.contact}>Contact us</Text></View>
-            <Animated.View accessibilityElementsHidden={!drawerOpen} importantForAccessibility={drawerOpen ? 'auto' : 'no-hide-descendants'} pointerEvents={drawerOpen ? 'auto' : 'none'} style={[StyleSheet.absoluteFill, { top: headerHeight, opacity: shift.interpolate({ inputRange: [0, drawerWidth], outputRange: [0, 1], extrapolate: 'clamp' }) }]}>
-              <Pressable onTouchStart={() => { excluded.current = false; }} accessibilityRole="button" accessibilityLabel="Close account panel" onPress={() => setDrawerOpen(false)} style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.25)' }]} />
+            <Animated.View accessibilityElementsHidden={!drawerOpen} importantForAccessibility={drawerOpen ? 'auto' : 'no-hide-descendants'} pointerEvents={drawerOpen ? 'auto' : 'none'} style={[StyleSheet.absoluteFill, { top: headerHeight, zIndex: 2 }, motion.panelStyle]}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Close account panel" onPress={() => setDrawerOpen(false)} style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.25)' }]} />
             </Animated.View>
           </Animated.View>
         </Tabs>
       </KeyboardAvoidingView>
+    </GestureDetector>
     </NavigationGestureContext.Provider>
     </KeyboardVisibilityContext.Provider>
   );

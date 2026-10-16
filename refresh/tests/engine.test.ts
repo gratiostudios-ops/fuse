@@ -66,7 +66,7 @@ test('signed-in refresh collects both Google sources in one response', async () 
   assert.equal(result.record?.snapshot.schedules.status, 'ok');
 });
 
-test('fresh data skips refresh until 30 minutes have elapsed, unless forced', async () => {
+test('fresh data skips refresh until 15 minutes have elapsed, unless forced', async () => {
   const { state, calls, deps } = fixture();
   const runner = createRefreshCoordinator(deps);
   await runner.run();
@@ -290,6 +290,8 @@ test('a transient AI failure retains the last valid output without refreshing it
   deps.process = async () => { throw new Error('Temporary outage'); };
   const result = await runner.run();
   assert.equal(result.status, 'partial');
-  assert.equal(state.cache, previous);
+  assert.equal(state.cache?.completedAt, previous?.completedAt);
+  assert.equal(state.cache?.processing, previous?.processing);
+  assert.equal(state.cache?.attemptedAt, new Date(state.time).toISOString());
   assert.equal((await runner.latest())?.processing.status, 'completed');
 });

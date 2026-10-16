@@ -1,6 +1,6 @@
 # Background refresh
 
-One shared pipeline runs on startup, when the app resumes with overdue data, approximately every 30 minutes while visible, and when the OS launches the registered native background task. Login, logout, account changes, and topic changes force a fresh run. An in-flight run is invalidated and its replacement queued when context changes.
+One shared pipeline runs on startup, when the app resumes with overdue data, every 15 minutes while visible and at an hourly minimum interval in native background work, and when the OS launches the registered native background task. Login, logout, account changes, and topic changes force a fresh run. An in-flight run is invalidated and its replacement queued when context changes.
 
 ## Data flow
 
@@ -11,7 +11,7 @@ One shared pipeline runs on startup, when the app resumes with overdue data, app
 - Pass the snapshot to `processRefreshSnapshot()` in `processor.ts`. For signed-in users it calls `fuse-ai` in Home mode and stores a validated card response. The server independently fetches verified records; it does not trust the client snapshot as Google activity evidence. Signed-out processing returns `not-configured`. See [Google setup](../README.md#google-setup-and-rollout) for deployment.
 - Cache the snapshot, processing status, AI response, and completion time locally. Private cache reads verify the current account, Google connection, and selected topics. Logout/account changes clear the cache; user/topic changes during collection, processing, or saving discard the old run.
 
-The 30-minute age is measured from the last saved attempt with a completed AI response. Failed or old unconfigured AI results do not postpone the next decision; server request budgets limit repeated calls. `refreshNow()` bypasses it. Authentication/session initialization failure aborts a run; it is not treated as anonymous access. A source's authentication rejection is distinct from its network/query failure.
+Foreground freshness is 15 minutes; native background freshness is one hour. The locally persisted attempt timestamp spaces retries after failures, while the previous successful response and its original completion time remain available. Home renders the account/topic-scoped cache without waiting for a network connection check; explicit account, topic, or Google connection changes invalidate it immediately. Due refreshes verify the Google connection before replacing the result. Legacy unconfigured cache entries do not postpone the first decision. `refreshNow()` bypasses it. Authentication/session initialization failure aborts a run; it is not treated as anonymous access. A source's authentication rejection is distinct from its network/query failure.
 
 ## Module usage
 
@@ -31,7 +31,7 @@ Home renders AI-selected verified Google cards and short reasons. There is no ac
 
 ## Background setup
 
-`index.ts` imports the task definition before Expo Router. Metro uses `background/task.native.ts` for Android/iOS and the web stub for browser builds. The native task is `fuse-background-refresh` with `minimumInterval: 30`. The Expo background-task config plugin sets iOS processing mode and the permitted scheduler identifier when a native build is generated.
+`index.ts` imports the task definition before Expo Router. Metro uses `background/task.native.ts` for Android/iOS and the web stub for browser builds. The native task is `fuse-background-refresh` with `minimumInterval: 60`. The Expo background-task config plugin sets iOS processing mode and the permitted scheduler identifier when a native build is generated.
 
 Rebuild the native development app after installing these modules:
 
@@ -45,7 +45,7 @@ Use a physical iOS device for background-task testing. Background registration m
 
 Native session/cache storage uses SecureStore with `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY` so a task can read it after the phone has been unlocked once since reboot. Existing sessions written with the old accessibility setting should be renewed by signing out/in after rebuilding. Browser data uses localStorage.
 
-Android/iOS choose when to execute background work; 30 minutes is not an exact timer. Force-quitting can stop execution until reopening the app. Activities are read directly from Google through the backend; no imported copies or offline completion queue are stored in Supabase. Organizer no longer polls every 30 seconds.
+Android/iOS choose when to execute background work; one hour is not an exact timer. Force-quitting can stop execution until reopening the app. Activities are read directly from Google through the backend; no imported copies or offline completion queue are stored in Supabase. Organizer no longer polls every 30 seconds.
 
 ## Verify
 
@@ -61,4 +61,4 @@ import * as BackgroundTask from 'expo-background-task';
 await BackgroundTask.triggerTaskWorkerForTestingAsync();
 ```
 
-If the cache is younger than 30 minutes, the worker will correctly skip fetching. To test a due run without waiting, remove the development cache key `fuse.refresh.snapshot` using the local storage adapter first. Sign in and check that only the connected account’s Google activities are cached; sign out and check private data is gone. Real OS scheduling and locked-device storage access require a native device and cannot be verified through a web preview.
+If the cache is younger than one hour, the worker will correctly skip fetching. To test a due run without waiting, remove the development cache key `fuse.refresh.snapshot` using the local storage adapter first. Sign in and check that only the connected account’s Google activities are cached; sign out and check private data is gone. Real OS scheduling and locked-device storage access require a native device and cannot be verified through a web preview.

@@ -26,7 +26,7 @@ The layout follows the supplied 402 × 874 Figma reference. Wider windows center
 
 The modular Supabase API lives in `api/`. Google setup and deployment requirements are below. Google Tasks and events are rendered by Organizer; suggestions are selected from the topic-matched catalog and saved upon frontend receipt.
 
-The [background refresh framework](refresh/README.md) fetches Google Tasks and primary-calendar events in one backend response when connected, and public suggestions for locally selected topics in either state. It caches a typed snapshot and calls the Home AI selector. It refreshes approximately every 30 minutes and catches up on app resume. Topic selection is available in the account panel.
+The [background refresh framework](refresh/README.md) fetches Google Tasks and primary-calendar events in one backend response when connected, and public suggestions for locally selected topics in either state. It caches a typed snapshot and calls the Home AI selector. Home displays its local result first, refreshes every 15 minutes while active, and requests hourly native background refreshes. It catches up when the app resumes with overdue data. Topic selection is available in the account panel.
 
 
 ## Google setup and rollout
@@ -61,7 +61,7 @@ Finger swipe directions: on Home, right-to-left opens Suggestions and left-to-ri
 
 Organizer reads all task lists and primary-calendar event instances directly from Google with pagination. Calendar reads cover the previous 30 days and upcoming year. Completion/reopening patches Google; UI changes follow confirmed success, and errors remain retryable without an offline queue. Calendar completion uses private Fuse metadata and ETag conflict handling. Tasks have date-only deadlines.
 
-Startup/resume, manual refresh, and the shared approximately 30-minute cadence fetch one organizer response with separate task/Calendar results. Successful sources remain usable when another fails. Home AI independently fetches current Google records for verified selections; confirmed completion and manual Organizer refresh regenerate Home. There is no Google-to-Supabase import or 30-second polling. Versioned local caches include user and Google connection identity; logout/disconnect/reconnect invalidate private results. External Google edits appear at manual or due refresh. Web needs an open/visible tab; native background work is OS-controlled.
+Startup/resume, manual refresh, and the 15-minute foreground / hourly native background cadence fetch one organizer response with separate task/Calendar results. Successful sources remain usable when another fails. Home AI independently fetches current Google records for verified selections; confirmed completion and manual Organizer refresh regenerate Home. There is no Google-to-Supabase import or 30-second polling. Versioned local caches include user and Google connection identity; logout/disconnect/reconnect invalidate private results. External Google edits appear at manual or due refresh. Web needs an open/visible tab; native background work is OS-controlled.
 
 Recaps use current Google task completion timestamps and Calendar private completion metadata. Reopening/deleting items can remove evidence of earlier completion, so new recap text explains incomplete history and unavailable sources. Saved recap text stays in Supabase. Chat keeps recent text in memory and creates tasks/events through the endpoint below; Home AI remains read-only.
 
@@ -110,7 +110,7 @@ Official references: [Supabase Google OAuth](https://supabase.com/docs/guides/au
 
 Apply `supabase/migrations/202610140003_user_suggestions_topics.sql` and `supabase/migrations/202610140004_suggestion_receipts.sql`, then deploy `fuse-ai` with its shared helpers. The receipt RPC authenticates the expected user, preserves historical recommendations/feedback, and inserts only missing assignments. Failed receipts persist locally and retry on app resume, tab focus, and later deliveries. Deploy the receipt migration before shipping this frontend.
 
-The local display history stores two outputs per user and separate event display counts. Only focused, foreground rendering records a display; background generation and reopening the same response do not increment counts. Failed AI refreshes retain the last valid output. The existing 30-minute refresh cadence is unchanged.
+The local display history stores two outputs per user and separate event display counts. Only focused, foreground rendering records a display; background generation and reopening the same response do not increment counts. Failed AI refreshes retain the last valid output. Home reuses its local result for 15 minutes in the foreground and an hour in native background work; failed attempts are also spaced to avoid repeated quota errors.
 
 Home/Suggestions transitions follow horizontal drags and use a push animation for tab presses. The tab bar and footer slide with Home when Accounts opens. Opening Accounts darkens the displaced content by 25% using a black overlay; the backdrop closes it while the hamburger stays bright and clickable. Panel content starts 70px below the panel top, with logout pinned to its previous bottom position. The composer sits 10px above the keyboard; bottom navigation hides while typing. Reduced-motion settings disable transition movement.
 

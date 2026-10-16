@@ -1,5 +1,6 @@
 import * as BackgroundTask from 'expo-background-task';
 import * as TaskManager from 'expo-task-manager';
+import { BACKGROUND_REFRESH_INTERVAL_MS } from '../refresh/engine';
 import { initializeRefreshRuntime } from '../refresh/runtime';
 
 export const REFRESH_TASK_NAME = 'fuse-background-refresh';
@@ -9,7 +10,7 @@ if (!TaskManager.isTaskDefined(REFRESH_TASK_NAME)) {
   TaskManager.defineTask(REFRESH_TASK_NAME, async ({ error }) => {
     if (error) return BackgroundTask.BackgroundTaskResult.Failed;
     try {
-      const result = await initializeRefreshRuntime().run();
+      const result = await initializeRefreshRuntime().run({ intervalMs: BACKGROUND_REFRESH_INTERVAL_MS });
       return result.status === 'failed' || result.status === 'partial'
         ? BackgroundTask.BackgroundTaskResult.Failed
         : BackgroundTask.BackgroundTaskResult.Success;
@@ -19,8 +20,11 @@ if (!TaskManager.isTaskDefined(REFRESH_TASK_NAME)) {
 
 export async function registerBackgroundRefresh(): Promise<'registered' | 'unavailable'> {
   if (!await TaskManager.isAvailableAsync() || await BackgroundTask.getStatusAsync() !== BackgroundTask.BackgroundTaskStatus.Available) return 'unavailable';
-  if (!await TaskManager.isTaskRegisteredAsync(REFRESH_TASK_NAME)) {
-    await BackgroundTask.registerTaskAsync(REFRESH_TASK_NAME, { minimumInterval: 30 });
+  if (await TaskManager.isTaskRegisteredAsync(REFRESH_TASK_NAME)) {
+    const options = await TaskManager.getTaskOptionsAsync<BackgroundTask.BackgroundTaskOptions>(REFRESH_TASK_NAME);
+    if (options?.minimumInterval === 60) return 'registered';
+    await BackgroundTask.unregisterTaskAsync(REFRESH_TASK_NAME);
   }
+  await BackgroundTask.registerTaskAsync(REFRESH_TASK_NAME, { minimumInterval: 60 });
   return 'registered';
 }

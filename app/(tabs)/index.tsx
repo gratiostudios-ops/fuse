@@ -11,6 +11,7 @@ import { askAI, type FuseResponse } from '../../api/ai';
 import { useAuth } from '../../src/auth-context';
 import { useOrganizer, OrganizerList } from '../../src/organizer';
 import { FuseResponseView } from '../../src/fuse-response';
+import { TypingIndicator } from '../../src/typing-indicator';
 import { NavigationGestureBoundary } from '../../src/navigation-gestures';
 import { getLatestRefresh, initializeRefreshRuntime, refreshNow } from '../../refresh/runtime';
 import { subscribeRefresh } from '../../refresh/cache';
@@ -20,11 +21,18 @@ const ORGANIZER_ENABLED = false;
 
 export default function HomeScreen() {
   const keyboardVisible = useContext(KeyboardVisibilityContext);
+  const [composerFocused, setComposerFocused] = useState(false);
+  useEffect(() => {
+    const hidden = Keyboard.addListener('keyboardDidHide', () => setComposerFocused(false));
+    return () => hidden.remove();
+  }, []);
   const inputRef = useRef<TextInput>(null);
+  const chatScroll = useRef<ScrollView>(null);
+  const [historyBrowsing, setHistoryBrowsing] = useState(false);
   const generation = useRef(0);
   const requestSequence = useRef(0);
   const requestController = useRef<AbortController | null>(null);
-  const [doneVisible, setDoneVisible] = useState(false);
+  const [revealedReply, setRevealedReply] = useState<FuseResponse | null>(null);
   const [message, setMessage] = useState('');
   const [mode, setMode] = useState<'home' | 'chat' | 'recap'>('home');
   const [preview, setPreview] = useState('');
@@ -62,13 +70,15 @@ export default function HomeScreen() {
     if (!userId) { setHomeLoading(false); return () => { generation.current++; }; }
     const update = async () => {
       const updateGeneration = generation.current;
-      const record = await getLatestRefresh();
+      const record = await getLatestRefresh(userId);
       if (!alive || identity.current !== userId || generation.current !== updateGeneration) return;
       const response = record?.processing.status === 'completed' ? record.processing.response : undefined;
       if (response) setHome(parseFuseResponse(response));
       setHomeError(record?.processing.status === 'error' ? record.processing.error : '');
     };
     const unsubscribe = subscribeRefresh(() => { void update().catch(() => {}); });
+    // Hydrate the saved Home independently of a slow or offline refresh.
+    void update().catch(() => {});
     setHomeLoading(true);
     void initializeRefreshRuntime().run().then(async result => {
       if (generation.current !== initialGeneration) return;
@@ -110,23 +120,19 @@ export default function HomeScreen() {
   const sending = useRef(false);
   useEffect(() => { if (error) console.warn('Chat request unavailable', error); }, [error]);
 
-  useEffect(() => {
-    setDoneVisible(false);
-    if (mode !== 'chat' || loading || (!messages.length && !error)) return;
-    const timer = setTimeout(() => setDoneVisible(true), 2000);
-    return () => clearTimeout(timer);
-  }, [mode, loading, messages, error]);
-
   function cancelRequest() {
     requestSequence.current++;
     requestController.current?.abort();
     requestController.current = null;
-    setDoneVisible(false);
+    setRevealedReply(null);
   }
 
-  async function sendMessage() {
-    const input = message.trim();
+  async function sendMessage(answer?: string) {
+    const input = (answer ?? message).trim();
     if (!input || sending.current || recapLoading) return;
+    inputRef.current?.blur();
+    Keyboard.dismiss();
+    setComposerFocused(false);
     cancelRequest();
     const controller = new AbortController();
     requestController.current = controller;
@@ -136,15 +142,15 @@ export default function HomeScreen() {
     sending.current = true;
     setLoading(true);
     inputRef.current?.clear();
-    setMode('chat'); setPreview(input); setDelivered(false); setMessage(''); setInputHeight(17);
+    setHistoryBrowsing(false);
+    setMode('chat'); setPreview(input); setDelivered(true); setMessage(''); setInputHeight(17);
     setError('');
     try {
       const reply = await askAI(input, messages.map(({ role, text }) => ({ role, text })), controller.signal);
       if (identity.current !== owner || generation.current !== requestGeneration || sequence !== requestSequence.current) return;
-      setMessages(previous => [...previous, { role: 'user', text: input }, { role: 'assistant', text: reply.message, response: reply }]);
-      setDelivered(true);
+      setMessages(previous => [...previous, { role: 'user', text: input }, { role: 'assistant', text: [reply.message, reply.follow_up?.question, reply.follow_up?.options.length ? 'Options: ' + reply.follow_up.options.join('; ') : ''].filter(Boolean).join('\n'), response: reply }]);
     } catch (err) {
-      if (identity.current === owner && generation.current === requestGeneration && sequence === requestSequence.current) { setError(err instanceof Error ? err.message : 'Unable to reach Fuse AI. Please try again.'); setMessage(input); }
+      if (identity.current === owner && generation.current === requestGeneration && sequence === requestSequence.current) { setDelivered(false); setError(err instanceof Error ? err.message : 'Unable to reach Fuse AI. Please try again.'); setMessage(draft => draft.length ? draft : input); }
     } finally {
       if (generation.current === requestGeneration && sequence === requestSequence.current) { sending.current = false; if (identity.current === owner) setLoading(false); }
     }
@@ -175,6 +181,11 @@ export default function HomeScreen() {
     finally { if (identity.current === owner && generation.current === requestGeneration && sequence === requestSequence.current) setRecapLoading(false); }
   }
   const latestReply = [...messages].reverse().find(item => item.role === 'assistant')?.response;
+  const replyFinished = !!latestReply && revealedReply === latestReply && !loading && !error;
+  const replyNeedsAnswer = !!latestReply?.follow_up
+    || (latestReply?.follow_up === undefined && /[?？]/.test(messages[messages.length - 1]?.text ?? ''));
+  const hasReplyActions = !!latestReply?.follow_up?.options.length || (!!latestReply && !replyNeedsAnswer);
+  const doneVisible = replyFinished && !replyNeedsAnswer;
   const focused = useIsFocused();
   const visibleResponse = mode === 'home' ? home : mode === 'chat' && !loading ? latestReply : null;
   useEffect(() => {
@@ -183,6 +194,7 @@ export default function HomeScreen() {
     const subscription = AppState.addEventListener('change', record);
     return () => subscription.remove();
   }, [focused, userId, visibleResponse]);
+  const olderReplies = (loading || error ? messages : messages.slice(0, -2)).filter(item => item.role === 'assistant' && item.response);
   const showStop = loading || recapLoading;
   const hasHomeOutput = !!home && (!!home.message.trim() || home.blocks.length > 0);
   const hasActivities = home?.blocks.some(block => block.type === 'task' || block.type === 'schedule');
@@ -196,23 +208,50 @@ export default function HomeScreen() {
         <Text style={styles.organizerLabel}>Organizer</Text>
         <CaretDownIcon size={17} color={colors.foreground} style={[styles.caret, organizerExpanded && { transform: [{ rotate: '180deg' }] }]} />
       </Pressable></NavigationGestureBoundary>}
-      <View style={styles.body}>
+      <View style={[styles.body, (keyboardVisible || composerFocused) && styles.contentDimmed]}>
         {mode === 'home' && !!userId && <NavigationGestureBoundary style={styles.actions}>
           <Pressable accessibilityRole="button" accessibilityLabel="Daily recap" disabled={loading || recapLoading} onPress={() => { void openRecap(); }} style={styles.iconButton}><NotebookIcon weight="bold" size={19} color="#606060" /></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="Refresh Home" accessibilityState={{ busy: homeLoading }} disabled={homeLoading} onPress={reloadHome} style={styles.iconButton}><ArrowClockwiseIcon weight="bold" size={19} color={homeLoading ? '#606060' : '#929292'} /></Pressable>
         </NavigationGestureBoundary>}
-        <ScrollView style={styles.scroll} contentContainerStyle={[styles.centered, mode === 'home' && styles.homeCentered]} keyboardShouldPersistTaps="handled">
+        <ScrollView ref={chatScroll} style={styles.scroll} scrollEventThrottle={32}
+          onScrollBeginDrag={() => { if (mode === 'chat') setHistoryBrowsing(true); }}
+          onScroll={event => {
+            if (mode !== 'chat') return;
+            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+            setHistoryBrowsing(contentOffset.y < contentSize.height - layoutMeasurement.height - 24);
+          }}
+          onScrollEndDrag={event => {
+            if (mode !== 'chat') return;
+            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+            setHistoryBrowsing(contentOffset.y < contentSize.height - layoutMeasurement.height - 24);
+          }}
+          onContentSizeChange={() => {
+            if (mode === 'chat' && !historyBrowsing) requestAnimationFrame(() => chatScroll.current?.scrollToEnd({ animated: true }));
+          }} contentContainerStyle={[styles.centered, mode === 'home' && styles.homeCentered]} keyboardShouldPersistTaps="handled">
           {mode === 'home' ? <View style={[styles.main, styles.homeMain]}>
             {ORGANIZER_ENABLED && organizerExpanded ? <OrganizerList controller={organizer} expanded /> : <>
               {!!userId && home && <><Text style={[styles.heading, styles.homeHeading]}>{hasActivities ? activitiesToday ? 'Today’s Plan' : 'Your Plan' : 'For you'}</Text><FuseResponseView response={home} presentation="home" /></>}
               {!userId && <Text style={styles.homeBodyText}>Sign in from the account menu to see your tasks and events.</Text>}
-              {homeLoading && <Text style={styles.homeBodyText}>Updating Home…</Text>}
+              {homeLoading && !hasHomeOutput && <Text style={styles.homeBodyText}>Updating Home…</Text>}
               {!homeLoading && !hasHomeOutput && !!homeError && <Text accessibilityRole="alert" numberOfLines={4} style={styles.requestError}>{homeError}</Text>}
             </>}
           </View> : <View style={styles.main}>
             {mode === 'chat' ? <>
-              {latestReply && !loading && !error && <FuseResponseView response={latestReply} />}
-              {loading && <Text style={styles.messageText}>Thinking…</Text>}
+              {messages.length > (loading || error ? 0 : 2) && <View style={styles.history}>
+                {olderReplies.map((item, index) =>
+                  <View key={index} style={styles.oldTurn}><FuseResponseView response={item.response!} muted historyOpacity={Math.min(0.86, Math.max(0.28, 0.66 - (olderReplies.length - 1 - index) * 0.12) + (historyBrowsing ? 0.2 : 0))} /></View>
+                )}
+              </View>}
+              {!loading && !error && latestReply && <>
+                <FuseResponseView key={latestReply.response_id ?? messages.length} response={latestReply} onRevealComplete={() => setRevealedReply(latestReply)} />
+                {hasReplyActions && <NavigationGestureBoundary style={[styles.replyActions, !replyFinished && styles.actionsPending]}
+                  pointerEvents={replyFinished ? 'auto' : 'none'} accessibilityElementsHidden={!replyFinished} importantForAccessibility={replyFinished ? 'auto' : 'no-hide-descendants'}>
+                  {latestReply.follow_up?.options.length ? <View style={styles.choices}>
+                    {latestReply.follow_up.options.map(option => <Pressable key={option} accessibilityRole="button" accessibilityLabel={option} disabled={!replyFinished || loading} onPress={() => { void sendMessage(option); }} style={styles.choice}><Text style={styles.choiceText}>{option}</Text></Pressable>)}
+                  </View> : <Pressable accessibilityRole="button" accessibilityLabel="Done" disabled={!doneVisible} onPress={clearResult} style={styles.pill}><Text style={styles.pillText}>Done</Text></Pressable>}
+                </NavigationGestureBoundary>}
+              </>}
+              {loading && <TypingIndicator />}
               {!loading && !!error && <Text accessibilityRole="alert" numberOfLines={4} style={styles.requestError}>{error}</Text>}
             </> : <>
               <Text style={styles.heading}>Daily recap{recap ? ' · ' + recap.local_date : ''}</Text>
@@ -220,18 +259,19 @@ export default function HomeScreen() {
               {!recapLoading && !recap && !!recapError && <Text accessibilityRole="alert" numberOfLines={4} style={styles.requestError}>{recapError}</Text>}
               {recap && <><Text style={styles.subheading}>Completed today</Text><Text style={styles.messageText}>{recap.completed_today}</Text><Text style={styles.subheading}>Tomorrow’s plan</Text><Text style={styles.messageText}>{recap.tomorrow_plan}</Text><Text style={styles.recapDate}>As of {new Date(recap.generated_at).toLocaleString(undefined, { timeZone: recap.timezone })} · {recap.timezone}</Text></>}
             </>}
-            {((mode === 'chat' && doneVisible) || (mode === 'recap' && !recapLoading)) && <NavigationGestureBoundary><Pressable accessibilityRole="button" accessibilityLabel="Done" onPress={clearResult} style={styles.pill}><Text style={styles.pillText}>Done</Text></Pressable></NavigationGestureBoundary>}
+            {mode === 'recap' && !recapLoading && <NavigationGestureBoundary><Pressable accessibilityRole="button" accessibilityLabel="Done" onPress={clearResult} style={styles.pill}><Text style={styles.pillText}>Done</Text></Pressable></NavigationGestureBoundary>}
           </View>}
         </ScrollView>
       </View>
       <NavigationGestureBoundary style={[styles.composer, keyboardVisible && { marginBottom: 10 }]} accessibilityLabel="Chat composer">
         {!!preview && <View style={styles.preview}><Text numberOfLines={4} ellipsizeMode="tail" style={styles.previewText}>{preview}</Text>{delivered && <View accessible accessibilityLabel="Message delivered" style={styles.delivery}><ChecksIcon size={20} color="#168BFF" /></View>}</View>}
         <View style={styles.input}>
-          <TextInput ref={inputRef} style={[styles.placeholder, { height: Math.min(preview ? 68 : 136, Math.max(17, inputHeight)), maxHeight: preview ? 68 : 136 }]} placeholder="Ask anything" placeholderTextColor={colors.placeholder}
+          <TextInput ref={inputRef} style={[styles.placeholder, { height: Math.min(preview ? 68 : 136, Math.max(17, inputHeight)), maxHeight: preview ? 68 : 136 }]} placeholder={mode === 'chat' && latestReply?.follow_up ? latestReply.follow_up.options.length ? 'Or type your own answer' : 'Type your answer' : 'Ask anything'} placeholderTextColor={colors.placeholder}
+            onFocus={() => setComposerFocused(true)} onBlur={() => setComposerFocused(false)}
             underlineColorAndroid="transparent" accessibilityLabel="Message to Fuse AI" value={message} onChangeText={setMessage}
-            onContentSizeChange={event => setInputHeight(event.nativeEvent.contentSize.height)} multiline scrollEnabled maxLength={2000} editable={!loading && !recapLoading} textAlignVertical="top" />
+            onContentSizeChange={event => setInputHeight(event.nativeEvent.contentSize.height)} multiline scrollEnabled maxLength={2000} editable textAlignVertical="top" />
           <Pressable accessibilityRole="button" accessibilityLabel={showStop ? 'Stop and return Home' : 'Send message'} style={styles.send}
-            disabled={!showStop && !message.trim()} onPress={showStop ? clearResult : sendMessage}>
+            disabled={!showStop && !message.trim()} onPress={showStop ? clearResult : () => { void sendMessage(); }}>
             {showStop ? <StopCircleIcon size={36} weight="fill" color="#E8E8E8" /> : <ArrowCircleRightIcon size={36} weight="fill" color="#E8E8E8" />}
           </Pressable>
         </View>
@@ -246,6 +286,7 @@ const styles = StyleSheet.create({
   organizerLabel: { marginLeft: 3, fontFamily: fonts.medium, fontSize: 14, lineHeight: 17, color: '#F8FAFC', includeFontPadding: false },
   caret: { marginTop: 5, marginRight: 4 },
   body: { flex: 1, minHeight: 0 },
+  contentDimmed: { opacity: 0.4, backgroundColor: '#000000', ...((Platform.OS === 'android' || Platform.OS === 'web') ? { filter: [{ blur: 1 }] } : {}) },
   actions: { position: 'absolute', top: 0, right: 16, zIndex: 1, height: 44, flexDirection: 'row', justifyContent: 'flex-end' },
   iconButton: { width: 36, height: 44, alignItems: 'center', justifyContent: 'center' },
   scroll: { flex: 1 },
@@ -253,6 +294,13 @@ const styles = StyleSheet.create({
   homeCentered: { paddingVertical: 10 },
   main: { paddingLeft: 24, paddingRight: 29, gap: 16 },
   homeMain: { gap: 8 },
+  replyActions: { minHeight: 44 },
+  actionsPending: { opacity: 0 },
+  choices: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  choice: { borderRadius: 22, borderWidth: 1, borderColor: '#515151', backgroundColor: '#232323', paddingHorizontal: 16, paddingVertical: 12, minHeight: 44 },
+  choiceText: { fontFamily: fonts.medium, color: '#FFFFFF', fontSize: 14, lineHeight: 20 },
+  history: { gap: 18, marginBottom: 6 },
+  oldTurn: { gap: 8 },
   heading: { fontFamily: fonts.heading, fontSize: 20, lineHeight: 22, color: '#FFFFFF', marginBottom: 23, marginLeft: 2 },
   homeHeading: { marginBottom: 13, transform: [{ translateY: -5 }] },
   recapDate: { fontFamily: fonts.regular, fontSize: 12, lineHeight: 16, color: '#929292' },

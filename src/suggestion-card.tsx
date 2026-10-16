@@ -1,5 +1,6 @@
 import { Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { fonts } from './theme';
+import { NavigationGestureBoundary } from './navigation-gestures';
 
 export type SuggestionCardData = {
   id: string;
@@ -10,7 +11,7 @@ export type SuggestionCardData = {
 };
 
 export function SuggestionCard({ suggestion }: { suggestion: SuggestionCardData }) {
-  return <View style={styles.container}>
+  return <NavigationGestureBoundary style={styles.container}>
     <Pressable accessibilityRole="link" accessibilityLabel={suggestion.title}
       onPress={() => { void Linking.openURL(suggestion.video_url).catch(reason => console.warn('Suggestion link unavailable', reason)); }} style={styles.row}>
       {suggestion.thumbnail_url ? <Image source={{ uri: suggestion.thumbnail_url }} resizeMode="cover" style={styles.thumbnail} /> : <View style={styles.thumbnail} />}
@@ -20,7 +21,7 @@ export function SuggestionCard({ suggestion }: { suggestion: SuggestionCardData 
       </View>
     </Pressable>
     <View style={styles.divider} />
-  </View>;
+  </NavigationGestureBoundary>;
 }
 
 const styles = StyleSheet.create({

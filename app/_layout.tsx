@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Slot } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_900Black } from '@expo-google-fonts/inter';
@@ -10,6 +11,7 @@ import { Poppins_400Regular, Poppins_600SemiBold } from '@expo-google-fonts/popp
 import { colors } from '../src/theme';
 import { AuthProvider } from '../src/auth-context';
 import { RefreshLifecycle } from '../src/refresh-lifecycle';
+import { LaunchGlimpse } from '../src/launch-glimpse';
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -25,22 +27,24 @@ export default function RootLayout() {
   });
 
   useEffect(() => {
-    if (loaded || error) void SplashScreen.hideAsync();
-  }, [loaded, error]);
+    if (error) void SplashScreen.hideAsync();
+  }, [error]);
+  const revealApp = useCallback(() => SplashScreen.hideAsync(), []);
 
   if (error) throw error;
   if (!loaded) return null;
 
   return (
-    <View style={styles.background}>
+    <GestureHandlerRootView style={styles.background}>
       <StatusBar hidden />
       <View style={styles.shell}>
         <AuthProvider>
           <RefreshLifecycle />
           <Slot />
+          <LaunchGlimpse onReady={revealApp} />
         </AuthProvider>
       </View>
-    </View>
+    </GestureHandlerRootView>
   );
 }
 

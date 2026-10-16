@@ -1,4 +1,4 @@
-import { getCachedUserSuggestions } from '../../api/suggestion-cache';
+import { getCachedUserSuggestions, mergeUserSuggestions } from '../../api/suggestion-cache';
 import { useIsFocused } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -23,19 +23,17 @@ export default function SuggestionsScreen() {
     const update = async () => {
       const current = ++sequence;
       const local = getReceivedSuggestions(owner);
-      if (alive) setFeed(previous => ({ userId: owner, items: [...new Map([...local, ...(previous.userId === owner ? previous.items : [])].map(item => [item.id, item])).values()] }));
+      if (alive) setFeed(previous => ({ userId: owner, items: mergeUserSuggestions(previous.userId === owner ? previous.items : [], local) }));
       try {
         const saved = await getUserSuggestions(owner);
-        if (alive && sequence === current) setFeed({ userId: owner, items: [...new Map([...getReceivedSuggestions(owner), ...saved].map(item => [item.id, item])).values()] });
+        if (alive && sequence === current) setFeed({ userId: owner, items: mergeUserSuggestions(getReceivedSuggestions(owner), saved) });
       } catch (reason) { console.warn('Saved suggestions unavailable', reason); }
       finally { if (alive) setLoading(false); }
     };
     const unsubscribe = subscribeUserSuggestions(() => { void update(); });
     void getCachedUserSuggestions(owner).then(cached => {
       if (!alive) return;
-      if (sequence === 0) setFeed(previous => ({ userId: owner, items: [...new Map([
-        ...cached, ...(previous.userId === owner ? previous.items : []), ...getReceivedSuggestions(owner),
-      ].map(item => [item.id, item])).values()] }));
+      if (sequence === 0) setFeed(previous => ({ userId: owner, items: mergeUserSuggestions(cached, previous.userId === owner ? previous.items : [], getReceivedSuggestions(owner)) }));
       if (focused) {
         setLoading(true);
         void retrySuggestionReceipts(owner);

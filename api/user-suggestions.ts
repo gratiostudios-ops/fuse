@@ -1,4 +1,4 @@
-import { cacheUserSuggestions } from './suggestion-cache';
+import { cacheUserSuggestions, getCachedUserSuggestions, mergeUserSuggestions } from './suggestion-cache';
 import { getSupabaseClient } from './supabase';
 import { authStorage } from './storage';
 import type { Suggestion } from './types';
@@ -21,7 +21,7 @@ export function receiveSuggestions(userId: string, response: FuseResponse): Prom
   const items = response.blocks.flatMap(block => block.type === 'suggestion' ? [{ ...block.data, description: block.data.description ?? null, recommended_at: new Date().toISOString() }] : []);
   if (!items.length) return Promise.resolve();
   const memory = received.get(userId) ?? new Map<string, Received>();
-  for (const item of items) memory.set(item.id, item);
+  for (const item of mergeUserSuggestions([...memory.values()], items)) memory.set(item.id, item);
   received.set(userId, memory); notify();
   const operation = queue.then(async () => {
     const stored = new Map((await readQueue(userId)).map(item => [item.id, item]));
@@ -41,7 +41,7 @@ async function flush(userId: string) {
   if (!items.length) return;
   const memory = received.get(userId) ?? new Map<string, Received>();
   const newlyHydrated = items.some(item => !memory.has(item.id));
-  for (const item of items) memory.set(item.id, item);
+  for (const item of mergeUserSuggestions([...memory.values()], items)) memory.set(item.id, item);
   received.set(userId, memory);
   if (newlyHydrated) notify();
   for (let offset = 0; offset < items.length; offset += 100) {
@@ -74,9 +74,12 @@ export async function getUserSuggestions(userId: string): Promise<UserSuggestion
     if (offset >= count) {
       const { data: { session: current } } = await client.auth.getSession();
       if (current?.user.id !== userId) throw new Error('Account changed while loading suggestions');
-      const complete = [...new Map([...getReceivedSuggestions(userId), ...items].map(item => [item.id, item])).values()];
+      const cached = await getCachedUserSuggestions(userId);
+      const itemIds = new Set(items.map(item => item.id));
+      const enriched = mergeUserSuggestions(cached.filter(item => itemIds.has(item.id)), items);
+      const complete = mergeUserSuggestions(getReceivedSuggestions(userId), enriched);
       await cacheUserSuggestions(userId, complete).catch(error => console.warn('Suggestion cache unavailable', error));
-      return items;
+      return enriched;
     }
     if (!data.length) throw new Error('Saved suggestions changed during loading');
   }

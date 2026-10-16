@@ -1,12 +1,13 @@
 import { loadOrganizer, clearOrganizerCache, subscribeOrganizer } from '../api/organizer';
 import { getSupabaseClient } from '../api/supabase';
 import { getSuggestions } from '../api/suggestions';
-import { clearRefreshCache, readRefreshCache, saveRefreshCache } from './cache';
+import { clearRefreshCache, readLastGoodHome, readRefreshCache, saveRefreshCache } from './cache';
 import { createRefreshCoordinator } from './engine';
 import { processRefreshSnapshot } from './processor';
 import { getRefreshTopicIds, subscribeTopicChanges } from './topics';
 
 const coordinator = createRefreshCoordinator({
+  useCachedContext: true,
   async getUserId() {
     const { data, error } = await getSupabaseClient().auth.getSession();
     if (error) throw error;
@@ -30,7 +31,7 @@ const coordinator = createRefreshCoordinator({
   async readCache() {
     const cached = await readRefreshCache();
     // Old text-only/unconfigured caches must not postpone the first AI decision.
-    if (cached?.snapshot.userId && (cached.processing.status !== 'completed' || !cached.processing.response?.response_id)) return null;
+    if (cached?.snapshot.userId && !cached.attemptedAt && (cached.processing.status !== 'completed' || !cached.processing.response?.response_id)) return null;
     return cached;
   },
   saveCache: saveRefreshCache,
@@ -45,23 +46,23 @@ export function initializeRefreshRuntime() {
   if (initialized) return coordinator;
   const client = getSupabaseClient();
   let previousUserId: string | null | undefined;
-  const reset = (keepOrganizer = false) => {
+  const reset = (keepOrganizer = false, clearLastGood = false) => {
     coordinator.invalidate();
     if (!keepOrganizer) clearOrganizerCache();
     // Do not call async Supabase auth methods inside onAuthStateChange's lock.
     queueMicrotask(() => {
-      void clearRefreshCache().then(() => coordinator.run({ force: true })).catch(() => {
+      void clearRefreshCache({ clearLastGood }).then(() => coordinator.run({ force: true })).catch(() => {
         console.warn('Could not clear the refresh cache. Cached results remain unavailable for the changed account.');
       });
     });
   };
   client.auth.onAuthStateChange((_event, session) => {
     const userId = session?.user.id ?? null;
-    if (previousUserId !== undefined && userId !== previousUserId) reset();
+    if (previousUserId !== undefined && userId !== previousUserId) reset(false, true);
     previousUserId = userId;
   });
   subscribeTopicChanges(() => reset());
-  subscribeOrganizer(reason => { if (['creation', 'completion', 'disconnect', 'timezone', 'connection', 'signout', 'manual-refresh'].includes(reason)) reset(reason === 'manual-refresh'); });
+  subscribeOrganizer(reason => { if (['creation', 'completion', 'disconnect', 'timezone', 'connection', 'signout', 'manual-refresh'].includes(reason)) reset(reason === 'manual-refresh', ['disconnect', 'connection', 'signout'].includes(reason)); });
   initialized = true;
   return coordinator;
 }
@@ -71,6 +72,11 @@ export function refreshNow() {
   return initializeRefreshRuntime().run({ force: true });
 }
 
-export function getLatestRefresh() {
-  return initializeRefreshRuntime().latest();
+export async function getLatestRefresh(userId?: string) {
+  const runtime = initializeRefreshRuntime();
+  if (userId) {
+    const saved = await readLastGoodHome(userId);
+    if (saved) return saved;
+  }
+  return runtime.latest({ localOnly: true });
 }

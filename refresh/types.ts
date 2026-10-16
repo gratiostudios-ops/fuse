@@ -26,6 +26,7 @@ export type ProcessingResult =
 export type CachedRefresh = {
   version: 2;
   completedAt: string;
+  attemptedAt?: string;
   snapshot: RefreshSnapshot;
   processing: ProcessingResult;
 };

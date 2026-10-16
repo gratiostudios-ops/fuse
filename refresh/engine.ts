@@ -1,9 +1,11 @@
 import type { Schedule, Suggestion, Task } from '../api/types';
 import type { CachedRefresh, ProcessingResult, RefreshRunResult, RefreshSnapshot, SourceResult } from './types';
 
-export const REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+export const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
+export const BACKGROUND_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
 
 export type RefreshDependencies = {
+  useCachedContext?: boolean;
   getUserId(): Promise<string | null>;
   getTopicIds(): Promise<string[]>;
   getOrganizer(): Promise<{ tasks: SourceResult<Task>; schedules: SourceResult<Schedule>; connectionId: string | null }>;
@@ -12,7 +14,7 @@ export type RefreshDependencies = {
   process(snapshot: RefreshSnapshot): Promise<ProcessingResult>;
   readCache(): Promise<CachedRefresh | null>;
   saveCache(record: CachedRefresh): Promise<void>;
-  clearCache(): Promise<void>;
+  clearCache(options?: { clearLastGood?: boolean }): Promise<void>;
   now(): number;
 };
 
@@ -41,6 +43,7 @@ async function collect<T>(operation: () => Promise<T[]>, status: 'ok' | 'not-imp
 /** One shared runner for foreground and headless background execution. */
 export function createRefreshCoordinator(deps: RefreshDependencies) {
   let generation = 0;
+  let cacheInvalidated = false;
   let active: Promise<RefreshRunResult> | undefined;
   let forceAgain = false;
   let acceptingForce = false;
@@ -51,10 +54,17 @@ export function createRefreshCoordinator(deps: RefreshDependencies) {
     catch { return null; }
   }
 
-  async function latest(): Promise<CachedRefresh | null> {
+  async function latest({ localOnly = false }: { localOnly?: boolean } = {}): Promise<CachedRefresh | null> {
     const startGeneration = generation;
     const userId = await deps.getUserId();
     const topicIds = await deps.getTopicIds();
+    if (localOnly) {
+      const record = await deps.readCache();
+      if (!record || cacheInvalidated || startGeneration !== generation) return null;
+      if (contextKey(record.snapshot.userId, record.snapshot.topicIds) !== contextKey(userId, topicIds)) return null;
+      if (await deps.getUserId() !== userId || startGeneration !== generation || cacheInvalidated) return null;
+      return record;
+    }
     let connectionId: string | null;
     try { connectionId = userId ? await deps.getConnectionId() : null; }
     catch { return null; } // An unverified connection must never expose an earlier private feed.
@@ -65,17 +75,25 @@ export function createRefreshCoordinator(deps: RefreshDependencies) {
     return record;
   }
 
-  async function once(force: boolean): Promise<RefreshRunResult> {
+  async function once(force: boolean, intervalMs: number): Promise<RefreshRunResult> {
     const startGeneration = generation;
     const userId = await deps.getUserId(); // Network/session failures abort, never imply logout.
     const topicIds = normalizeTopics(await deps.getTopicIds());
+    const cached = await deps.readCache();
+    // A fresh local Home must not fetch organizer data just to decide whether it is due.
+    if (!force && deps.useCachedContext && !cacheInvalidated && cached
+      && contextKey(cached.snapshot.userId, cached.snapshot.topicIds) === contextKey(userId, topicIds)) {
+      const age = deps.now() - Date.parse(cached.attemptedAt ?? cached.completedAt);
+      if (age >= 0 && age < intervalMs && startGeneration === generation && await deps.getUserId() === userId && startGeneration === generation && !cacheInvalidated) {
+        return { status: 'skipped', reason: 'not-due', record: cached };
+      }
+    }
     const connectionId = await connectionScope(userId);
     const scope = contextKey(userId, topicIds, connectionId);
-    const cached = await deps.readCache();
     if (cached && contextKey(cached.snapshot.userId, cached.snapshot.topicIds, cached.snapshot.connectionId) !== scope) await deps.clearCache();
     if (!force && cached && contextKey(cached.snapshot.userId, cached.snapshot.topicIds, cached.snapshot.connectionId) === scope) {
-      const age = deps.now() - Date.parse(cached.completedAt);
-      if (age >= 0 && age < REFRESH_INTERVAL_MS) return { status: 'skipped', reason: 'not-due' };
+      const age = deps.now() - Date.parse(cached.attemptedAt ?? cached.completedAt);
+      if (age >= 0 && age < intervalMs && !cacheInvalidated) return { status: 'skipped', reason: 'not-due', record: cached };
     }
 
     const unchanged = async () => startGeneration === generation && scope === contextKey(await deps.getUserId(), await deps.getTopicIds(), await connectionScope(userId)) && startGeneration === generation;
@@ -119,26 +137,34 @@ export function createRefreshCoordinator(deps: RefreshDependencies) {
     if (!await unchanged()) return { status: 'discarded', reason: 'context-changed' };
 
     // Keep the last valid output available after a transient AI failure. Its old
-    // timestamp keeps it eligible for retry rather than caching a failure for 30 minutes.
+    // completion time stays unchanged; attemptedAt spaces retries to avoid quota loops.
     if (processing.status === 'error' && cached?.processing.status === 'completed'
       && contextKey(cached.snapshot.userId, cached.snapshot.topicIds, cached.snapshot.connectionId) === scope) {
-      return { status: 'partial', record: cached };
+      const retained = { ...cached, attemptedAt: new Date(deps.now()).toISOString() };
+      await deps.saveCache(retained);
+      if (!await unchanged()) {
+        await deps.clearCache({ clearLastGood: true });
+        return { status: 'discarded', reason: 'context-changed' };
+      }
+      cacheInvalidated = false;
+      return { status: 'partial', record: retained };
     }
 
-    const record: CachedRefresh = { version: 2, completedAt: new Date(deps.now()).toISOString(), snapshot, processing };
+    const record: CachedRefresh = { version: 2, attemptedAt: new Date(deps.now()).toISOString(), completedAt: new Date(deps.now()).toISOString(), snapshot, processing };
     await deps.saveCache(record);
     if (!await unchanged()) {
-      await deps.clearCache();
+      await deps.clearCache({ clearLastGood: true });
       return { status: 'discarded', reason: 'context-changed' };
     }
+    cacheInvalidated = false;
     const failed = [tasks, schedules, suggestions].some(source => ['error', 'partial', 'authentication-required'].includes(source.status)) || processing.status === 'error';
     return { status: failed ? 'partial' : 'completed', record };
   }
 
-  function run({ force = false }: { force?: boolean } = {}): Promise<RefreshRunResult> {
+  function run({ force = false, intervalMs = REFRESH_INTERVAL_MS }: { force?: boolean; intervalMs?: number } = {}): Promise<RefreshRunResult> {
     if (active) {
       // A force request arriving after the loop has ended must start a new run.
-      if (force && !acceptingForce) return active.then(() => run({ force: true }));
+      if (force && !acceptingForce) return active.then(() => run({ force: true, intervalMs }));
       if (force) forceAgain = true;
       return active;
     }
@@ -148,7 +174,7 @@ export function createRefreshCoordinator(deps: RefreshDependencies) {
       let forced = force;
       do {
         forceAgain = false;
-        try { result = await once(forced); }
+        try { result = await once(forced, intervalMs); }
         catch (error) { result = { status: 'failed', reason: errorMessage(error) }; }
         forced = forceAgain;
       } while (forced);
@@ -162,6 +188,6 @@ export function createRefreshCoordinator(deps: RefreshDependencies) {
     run,
     latest,
     // Call synchronously on identity/topic changes, before any async cache work.
-    invalidate(): void { generation++; },
+    invalidate(): void { generation++; cacheInvalidated = true; },
   };
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cacheUserSuggestions, getCachedUserSuggestions } from '../../api/suggestion-cache';
+import { cacheUserSuggestions, getCachedUserSuggestions, mergeUserSuggestions } from '../../api/suggestion-cache';
 import type { UserSuggestion } from '../../api/user-suggestions';
 
 test('suggestion cache persists complete rows, isolates accounts, and merges receipts', async () => {
@@ -22,6 +22,15 @@ test('suggestion cache persists complete rows, isolates accounts, and merges rec
     const cached = await getCachedUserSuggestions('a');
     assert.deepEqual(cached.map(item => item.id), ['two', 'one']);
     assert.equal(cached[1].description, 'Updated description');
+    // A minimal AI receipt or catalog response must retain the offline summary.
+    await cacheUserSuggestions('a', [{ ...card, description: null }], true);
+    assert.equal((await getCachedUserSuggestions('a')).find(item => item.id === 'one')?.description, 'Updated description');
+    await cacheUserSuggestions('a', [{ ...card, title: 'Fresh title', description: '' }]);
+    const partial = await getCachedUserSuggestions('a');
+    assert.equal(partial.length, 1);
+    assert.equal(partial[0].title, 'Fresh title');
+    assert.equal(partial[0].description, 'Updated description');
+    assert.equal(mergeUserSuggestions(partial, [{ ...card, description: 'New catalog summary' }])[0].description, 'New catalog summary');
     storage.set('fuse.user-suggestions.b', storage.get('fuse.user-suggestions.a')!);
     assert.deepEqual(await getCachedUserSuggestions('b'), []);
     await cacheUserSuggestions('a', []);

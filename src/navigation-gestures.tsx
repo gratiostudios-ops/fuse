@@ -1,20 +1,17 @@
-import { createContext, useContext, type MutableRefObject } from 'react';
+import { createContext, useContext, useMemo } from 'react';
 import { View, type ViewProps } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
-export const NavigationGestureContext = createContext<MutableRefObject<boolean> | null>(null);
+export const NavigationGestureContext = createContext<ReturnType<typeof Gesture.Pan> | null>(null);
 
-/** Excludes text editing and interactive controls from horizontal page gestures. */
-export function NavigationGestureBoundary({ children, onTouchStart, ...props }: ViewProps) {
-  const excluded = useContext(NavigationGestureContext);
-  return <View {...props} onTouchStart={event => {
-    if (excluded) excluded.current = true;
-    onTouchStart?.(event);
-  }}>{children}</View>;
-}
-
-export function swipeDestination(dx: number, dy: number, drawerOpen: boolean, suggestions: boolean) {
-  if (Math.abs(dx) < 64 || Math.abs(dx) < Math.abs(dy) * 1.6) return null;
-  if (drawerOpen) return dx < 0 ? 'close' : null;
-  if (suggestions) return dx > 0 ? 'home' : null;
-  return dx < 0 ? 'suggestions' : 'accounts';
+/** Wait for controls to finish their touch sequence before allowing page swipes. */
+export function NavigationGestureBoundary({ children, ...props }: ViewProps) {
+  const navigation = useContext(NavigationGestureContext);
+  const native = useMemo(() => {
+    // Immediate activation on a wrapper View cancels React Native Pressable touches.
+    // A passive native recognizer still blocks the page pan while controls handle taps.
+    const gesture = Gesture.Native();
+    return navigation ? gesture.blocksExternalGesture(navigation) : gesture;
+  }, [navigation]);
+  return <GestureDetector gesture={native}><View {...props} collapsable={false}>{children}</View></GestureDetector>;
 }

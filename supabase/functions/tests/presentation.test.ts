@@ -50,3 +50,22 @@ test('Home preserves verified setup guidance instead of returning a blank screen
   assert.equal(result.message, 'Choose a few interests in the account panel to personalize your feed.');
   assert.deepEqual(result.blocks, []);
 });
+
+test('chat preserves validated follow-up choices and Home excludes them', () => {
+  const follow_up = { question: 'Task or calendar event?', options: ['Task', 'Calendar event'] };
+  const decision = { answer_kind: 'answer', message: '', selections: [], follow_up };
+  assert.deepEqual(buildResponse(decision, [], false).follow_up, follow_up);
+  assert.equal(buildResponse(decision, [], true).follow_up, undefined);
+  assert.equal(buildResponse({ ...decision, answer_kind: 'empty' }, [], false).follow_up, undefined);
+  assert.equal(buildResponse({ ...decision, follow_up: null }, [], false).follow_up, null);
+  assert.throws(() => buildResponse({ ...decision, follow_up: { question: '', options: [] } }, [], false), /follow-up/);
+  assert.throws(() => buildResponse({ ...decision, follow_up: { question: 'Choose', options: [42] } }, [], false), /follow-up/);
+  assert.throws(() => buildResponse({ ...decision, follow_up: { question: 'Choose', options: Array(5).fill('Choice') } }, [], false), /follow-up/);
+});
+
+test('follow-ups allow text-only or two to four distinct choices', () => {
+  const response = (options: string[]) => buildResponse({ answer_kind: 'answer', message: '', selections: [], follow_up: { question: 'Which would you like?', options } }, [], false);
+  for (const options of [[], ['Task', 'Calendar event'], ['Today', 'Tomorrow', 'Next week', 'No deadline']]) assert.deepEqual(response(options).follow_up?.options, options);
+  assert.throws(() => response(['Task']), /follow-up/);
+  assert.throws(() => response(['Task', ' task ']), /follow-up/);
+});
